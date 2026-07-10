@@ -1,0 +1,10 @@
+{
+  "name": "專屬 AI 機器人",
+  "short_name": "AI 助理",
+  "description": "具備學習能力的大腦聊天機器人",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "orientation": "portrait"
+}
