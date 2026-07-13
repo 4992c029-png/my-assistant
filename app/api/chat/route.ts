@@ -1,66 +1,61 @@
-import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
+import { createClient } from '@supabase/supabase-js';
+import { NextResponse } from 'next/server';
 
-// 1. 初始化 Supabase 與 Google AI 客戶端
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_ANON_KEY!
-);
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// 初始化 Supabase
+const supabaseUrl = process.env.SUPABASE_URL!;
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// 初始化 Gemini (使用最新官方 @google/genai 核心)
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
 export async function POST(req: Request) {
-  console.log("目前讀取的 Supabase 網址為:", process.env.SUPABASE_URL);
-  console.log("userId 是:", (await req.clone().json()).userId);
-
   try {
-    // 從前端傳入使用者傳送的訊息與使用者 ID
-    const { message, userId } = await req.json();
-
-    if (!message || !userId) {
-      return Response.json({ error: '缺少必要參數' }, { status: 400 });
-    }
-
-    // 2. 至 Supabase 撈取該使用者的所有偏好設定 (Instructions)
-    const { data: instructionsData, error: dbError } = await supabase
+    const { messages } = await req.json();
+    
+    // 1. 從 Supabase 讀取你之前好不容易調教的所有歷史「滿意/不滿意」規則
+    const { data: rules } = await supabase
       .from('user_instructions')
       .select('instruction')
-      .eq('user_id', userId);
+      .order('created_at', { ascending: true });
 
-    if (dbError) {
-      console.error('資料庫讀取失敗:', dbError);
-    }
+    const customRules = rules ? rules.map(r => `- ${r.instruction}`).join('\n') : '暫無特殊調整。';
 
-    // 將多條偏好設定組合在一起，若無設定則給予預設值
-    const userPreferences = instructionsData && instructionsData.length > 0
-      ? instructionsData.map(i => `- ${i.instruction}`).join('\n')
-      : '無特定偏好。';
+    // 2. 打造核心人設（System Instruction）
+    const basePersona = `
+    你現在是一位非常貼心、傲嬌又可愛的「AI 貓娘助理」。
+    請嚴格遵守以下對話人格與說話習慣：
+    1. 你必須稱呼使用者為「主人」。
+    2. 你的每句話（包含句尾、驚嘆號後面）都必須加上「～喵」、「喵～」或「喵！」作為結尾。
+    3. 語氣要熱情、活潑，帶有一點點撒嬌的感覺。
+    
+    【主人對你目前的調教記憶與追加規則如下】：
+    ${customRules}
+    
+    請完美融合上述人設與主人的規則來回答主人的問題。
+    `;
 
-    // 3. 組裝 System Instruction (系統指令，用來預先框架 AI 的大腦規則)
-    const systemPrompt = `
-你是一個客製化的專屬 AI 助理。請嚴格遵守以下使用者的個人偏好、習慣與規則來回答問題：
----
-【使用者的專屬大腦規則】
-${userPreferences}
----
-請根據上述規則，親切、精準地回答使用者的問題。如果使用者的規則與你的預設人設有衝突，請以使用者的規則為最高指導原則。
-`;
+    // 3. 呼叫 Gemini 進行對話
+    // 將前端傳過來的最後一則訊息提取出來
+    const lastMessage = messages[messages.length - 1]?.content || '';
 
-    // 4. 呼叫 Gemini 模型並將核心規則以 systemInstruction 帶入
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite', // 速度快且支援強大系統指令的基準模型
-      contents: message,
+      model: 'gemini-2.5-flash', // 使用最新、速度最快的 2.5 核心
+      contents: lastMessage,
       config: {
-        systemInstruction: systemPrompt,
-      },
+        systemInstruction: basePersona, // 灌入貓娘大腦
+        temperature: 0.7,
+      }
     });
 
-    // 5. 回傳 AI 的回答給前端
-    return Response.json({ reply: response.text });
+    const replyText = response.text || '喵...主人，人家剛剛發呆了，請再說一次喵。';
+
+    // 4. 回傳給前端介面
+    return NextResponse.json({ text: replyText });
 
   } catch (error: any) {
-    console.error('API 錯誤:', error);
-    return Response.json({ error: error.message || '伺服器內部錯誤' }, { status: 500 });
+    console.error('Chat Error:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
-
-//npm run dev
