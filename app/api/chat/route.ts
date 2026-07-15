@@ -15,15 +15,38 @@ export async function POST(req: Request) {
       return Response.json({ error: '缺少必要參數' }, { status: 400 });
     }
 
-    // 1. 將「使用者的話」寫入歷史資料庫 (加上報錯偵測)
-    const { error: userInsertError } = await supabase.from('chat_history').insert([
-      { user_id: userId, role: 'user', content: message }
-    ]);
-    if (userInsertError) {
-      console.error("❌ 【資料庫錯誤】寫入使用者對話歷史失敗！請檢查 chat_history 的 RLS 政策是否開放寫入！", userInsertError);
+    // 取得今天的日期字串 (格式: YYYY-MM-DD)
+    const todayStr = new Date().toISOString().split('T')[0];
+    const userMsg = { role: 'user', content: message, created_at: new Date().toISOString() };
+
+    // --- 1. 先寫入/追加使用者的對話到「今天的歸檔檔案」中 ---
+    let todayMessages = [];
+    let rowId = null;
+
+    const { data: todayRows } = await supabase
+      .from('daily_chat_history')
+      .select('id, messages')
+      .eq('user_id', userId)
+      .eq('chat_date', todayStr);
+
+    if (todayRows && todayRows.length > 0) {
+      rowId = todayRows[0].id;
+      todayMessages = [...todayRows[0].messages, userMsg];
+      await supabase
+        .from('daily_chat_history')
+        .update({ messages: todayMessages, updated_at: new Date().toISOString() })
+        .eq('id', rowId);
+    } else {
+      todayMessages = [userMsg];
+      const { data: newRow } = await supabase
+        .from('daily_chat_history')
+        .insert({ user_id: userId, chat_date: todayStr, messages: todayMessages })
+        .select('id')
+        .single();
+      rowId = newRow?.id;
     }
 
-    // 2. 撈取大腦規則
+    // --- 2. 撈取大腦偏好規則 ---
     let { data: instructionsData } = await supabase
       .from('user_instructions')
       .select('instruction')
@@ -37,38 +60,36 @@ export async function POST(req: Request) {
       ? instructionsData.map(i => `- ${i.instruction}`).join('\n')
       : '無特定偏好。';
 
-    // 3. 撈取該使用者最新 20 筆對話歷史當作上下文
-    const { data: historyData, error: fetchHistoryError } = await supabase
-      .from('chat_history')
-      .select('role, content')
+    // --- 3. 撈取該使用者最近 3 天的歸檔，當作 Gemini 的上下文 ---
+    const { data: recentDays } = await supabase
+      .from('daily_chat_history')
+      .select('messages')
       .eq('user_id', userId)
-      .order('created_at', { ascending: true })
-      .limit(20);
+      .order('chat_date', { ascending: false })
+      .limit(3);
 
-    if (fetchHistoryError) {
-      console.error("❌ 【資料庫錯誤】撈取對話歷史失敗:", fetchHistoryError);
-    }
+    // 反轉陣列（讓舊的日子排在前面）並打平成單一的對話歷史陣列
+    const historyData = recentDays
+      ? recentDays.reverse().flatMap((day: any) => day.messages)
+      : [];
 
-    // 4. 轉換為 Gemini 官方的 Contents 上下文格式
-    const contents = historyData && historyData.length > 0
-      ? historyData.map(h => ({
-          role: h.role === 'model' ? 'model' : 'user',
-          parts: [{ text: h.content }]
-        }))
-      : [{ role: 'user', parts: [{ text: message }] }];
+    // 轉換成 Gemini 格式 (最多傳送最近 20 筆對話，防 Token 爆量)
+    const contents = historyData.slice(-20).map((h: any) => ({
+      role: h.role === 'model' ? 'model' : 'user',
+      parts: [{ text: h.content }]
+    }));
 
-    // 5. 洗腦 Prompt
+    // --- 4. 設計 System Prompt ---
     const systemPrompt = `
 你是一個客製化的專屬 AI 助理。請字字句句嚴格遵守以下使用者的個人偏好大腦規則：
 ---
 【使用者的最高指導大腦規則】
 ${userPreferences}
 ---
-請根據上述規則，並參考先前的歷史對話上下文脈絡，親切地回答問題。
-//⚠️ 死命令：如果規則有要求說話口頭禪（如：～喵）或稱呼（如：主人），你必須在回答的每一句話中 100% 徹底執行！
-`;
+請根據上述規則，並參考先前按天歸檔的歷史對話上下文脈絡，親切地回答問題。
+;
 
-    // 6. 送出對話（包含歷史紀錄）
+    // --- 5. 呼叫 Gemini 取得回答 ---
     const response = await ai.models.generateContent({
       model: 'gemini-3.1-flash-lite', 
       contents: contents, 
@@ -76,14 +97,20 @@ ${userPreferences}
     });
 
     const replyText = response.text || "我不太明白...";
+    const modelMsg = { role: 'model', content: replyText, created_at: new Date().toISOString() };
 
-    // 7. 將「AI 的回應」寫入歷史資料庫 (加上報錯偵測)
-    const { error: modelInsertError } = await supabase.from('chat_history').insert([
-      { user_id: userId, role: 'model', content: replyText }
-    ]);
-    if (modelInsertError) {
-      console.error("❌ 【資料庫錯誤】寫入 AI 回應歷史失敗！", modelInsertError);
-    }
+    // --- 6. 將 AI 回應追加到今天的歸檔檔案中 ---
+    const { data: updatedTodayRows } = await supabase
+      .from('daily_chat_history')
+      .select('messages')
+      .eq('id', rowId)
+      .single();
+
+    const finalMessages = [...(updatedTodayRows?.messages || todayMessages), modelMsg];
+    await supabase
+      .from('daily_chat_history')
+      .update({ messages: finalMessages, updated_at: new Date().toISOString() })
+      .eq('id', rowId);
 
     return Response.json({ reply: replyText });
 
