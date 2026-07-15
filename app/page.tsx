@@ -27,22 +27,22 @@ export default function Home() {
       modalBtn: 'text-sm py-2 px-4 w-24'
     },
     medium: {
-      bubble: 'text-xl p-3.5 px-5 rounded-3xl',          // ~20px
-      input: 'text-xl py-2.5 px-5',
-      sendBtn: 'text-xl px-5 py-2.5',
+      bubble: 'text-xl p-3 px-5 rounded-3xl',             // ~20px
+      input: 'text-xl py-2 px-4',
+      sendBtn: 'text-xl px-5 py-2',
       recordBtn: 'text-sm mt-1.5 pl-1.5',
       modalTitle: 'text-2xl font-bold',
       modalText: 'text-xl',
       modalBtn: 'text-base py-2.5 px-5 w-28'
     },
     large: {
-      bubble: 'text-3xl p-4 px-6 rounded-[1.8rem]',        // ~30px (字體超大，但 Padding 收緊)
-      input: 'text-2xl py-2.5 px-5',                       // 縮減垂直 Padding，防止推開視窗
-      sendBtn: 'text-2xl px-6 py-2.5',                     // 縮減垂直 Padding，防止推開視窗
-      recordBtn: 'text-lg mt-2 pl-2',
+      bubble: 'text-[26px] p-3 px-5 rounded-[1.8rem]',    // ~26px (字體特大，但 Padding 收緊)
+      input: 'text-[22px] py-1.5 px-4',                   // 垂直 py 縮小至 1.5，完全杜絕發送按鈕移出
+      sendBtn: 'text-[22px] px-5 py-1.5',                 // 垂直 py 縮小至 1.5，完全杜絕發送按鈕移出
+      recordBtn: 'text-base mt-1.5 pl-2',
       modalTitle: 'text-2xl font-bold',
-      modalText: 'text-xl',
-      modalBtn: 'text-lg py-3 px-6 w-32'
+      modalText: 'text-lg',
+      modalBtn: 'text-base py-2 px-4 w-28'
     }
   };
 
@@ -141,12 +141,36 @@ export default function Home() {
   };
 
   return (
-    // 【極重要修正】使用 h-dvh 鎖定動態視窗高度，搭配 overflow-hidden 確保沒有任何元素能溢出螢幕外
-    <div className="fixed inset-0 h-dvh w-full flex flex-col bg-slate-900 text-white overflow-hidden select-none">
+    // 使用 style 鎖定真實動態 100dvh 高度，防止任何底端溢出
+    <div 
+      className="fixed inset-0 w-full flex flex-col bg-slate-900 text-white overflow-hidden select-none"
+      style={{ height: '100dvh', maxHeight: '100dvh' }}
+    >
+      {/* ⚠️ 強制注入 CSS：阻斷手機原生彈性滾動、屏蔽 Vercel 預覽工具列懸浮鈕 */}
+      <style>{`
+        html, body {
+          margin: 0 !important;
+          padding: 0 !important;
+          width: 100% !important;
+          height: 100% !important;
+          overflow: hidden !important;
+          position: fixed !important;
+        }
+        /* 屏蔽 Vercel 懸浮選單按鈕 */
+        #vercel-live-feedback,
+        vercel-live-feedback,
+        .vercel-live-feedback,
+        [id^="vercel-"],
+        [class^="vercel-"] {
+          display: none !important;
+          visibility: hidden !important;
+          opacity: 0 !important;
+          pointer-events: none !important;
+        }
+      `}</style>
       
-      {/* 1. 頂部主導覽列 (不可伸縮 flex-shrink-0) */}
+      {/* 1. 頂部主導覽列 */}
       <header className="flex-shrink-0 bg-gradient-to-r from-violet-600 to-indigo-600 p-4 shadow-md flex items-center justify-between gap-2">
-        
         {/* 左側：助理 Logo 與名稱 */}
         <div className="flex items-center space-x-2 min-w-0">
           <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center font-bold text-xl border border-white/30 flex-shrink-0">
@@ -158,7 +182,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* 【新增需求 1】中間：下拉式字體選擇選單 */}
+        {/* 中間：下拉式字體選擇選單 */}
         <div className="relative flex-shrink-0">
           <select
             value={fontSize}
@@ -169,7 +193,6 @@ export default function Home() {
             <option value="medium" className="bg-slate-800 text-white">字體：中</option>
             <option value="large" className="bg-slate-800 text-white">字體：大</option>
           </select>
-          {/* 下拉箭頭小圖標 */}
           <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-white/70">
             <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
               <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/>
@@ -186,7 +209,7 @@ export default function Home() {
         </button>
       </header>
 
-      {/* 2. 聊天對話區 (可滾動 flex-1 overflow-y-auto) */}
+      {/* 2. 聊天對話區 (唯一可滾動區，在 Dvh 下被限制高度) */}
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
         {messages.length === 0 ? (
           <div className="text-center text-slate-500 py-20 text-lg">
@@ -196,7 +219,6 @@ export default function Home() {
           messages.map((msg) => (
             <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className="flex flex-col max-w-[85%] space-y-1">
-                {/* 對話氣泡：套用當前字體大小樣式 */}
                 <div className={`shadow-md transition-all duration-200 break-words ${currentStyle.bubble} ${
                   msg.role === 'user' 
                     ? 'bg-violet-600 text-white rounded-tr-none' 
@@ -205,7 +227,6 @@ export default function Home() {
                   {msg.content}
                 </div>
                 
-                {/* 記錄按鈕：套用當前按鈕大小樣式 */}
                 <button 
                   onClick={() => {
                     setSelectedText(msg.content);
@@ -221,8 +242,8 @@ export default function Home() {
         )}
       </div>
 
-      {/* 3. 底部輸入區 (鎖定在最下方不可伸縮 flex-shrink-0) */}
-      <div className="flex-shrink-0 p-4 border-t border-slate-800 bg-slate-900/95 flex space-x-2 pb-4 md:pb-6">
+      {/* 3. 底部輸入區 (高度嚴格控制，永不移出畫面) */}
+      <div className="flex-shrink-0 p-3 border-t border-slate-800 bg-slate-900/95 flex space-x-2 pb-5 md:pb-6">
         <input
           type="text"
           value={input}
