@@ -15,37 +15,34 @@ export default function Home() {
   const [showRecordModal, setShowRecordModal] = useState(false);
   const [selectedText, setSelectedText] = useState(''); 
 
-  // 2. 比例縮放樣式表 (根據選擇的字體，動態改變所有元件的大小)
+  // 2. 比例縮放樣式表 (最佳化：大字體時縮減垂直高度，防止按鈕跑出版面)
   const sizeStyles = {
     small: {
-      bubble: 'text-base p-3 px-4 rounded-2xl',           // ~16px
-      btn: 'text-xs py-1 px-2.5 rounded-md',
-      input: 'text-base py-3 px-4',
-      sendBtn: 'text-base px-5 py-3',
+      bubble: 'text-base p-2.5 px-4 rounded-2xl',           // ~16px
+      input: 'text-base py-2 px-4',
+      sendBtn: 'text-base px-4 py-2',
       recordBtn: 'text-xs mt-1 pl-1',
       modalTitle: 'text-lg font-bold',
       modalText: 'text-base',
       modalBtn: 'text-sm py-2 px-4 w-24'
     },
     medium: {
-      bubble: 'text-xl p-4.5 px-5 rounded-3xl',          // ~20px
-      btn: 'text-sm py-1.5 px-3 rounded-lg',
-      input: 'text-xl py-4 px-5',
-      sendBtn: 'text-xl px-6 py-4',
+      bubble: 'text-xl p-3.5 px-5 rounded-3xl',          // ~20px
+      input: 'text-xl py-2.5 px-5',
+      sendBtn: 'text-xl px-5 py-2.5',
       recordBtn: 'text-sm mt-1.5 pl-1.5',
       modalTitle: 'text-2xl font-bold',
       modalText: 'text-xl',
-      modalBtn: 'text-base py-3 px-6 w-28'
+      modalBtn: 'text-base py-2.5 px-5 w-28'
     },
     large: {
-      bubble: 'text-3xl p-6 px-7 rounded-[2rem]',        // ~30px
-      btn: 'text-lg py-2 px-4 rounded-xl',
-      input: 'text-2xl py-5 px-6',
-      sendBtn: 'text-2xl px-8 py-5',
+      bubble: 'text-3xl p-4 px-6 rounded-[1.8rem]',        // ~30px (字體超大，但 Padding 收緊)
+      input: 'text-2xl py-2.5 px-5',                       // 縮減垂直 Padding，防止推開視窗
+      sendBtn: 'text-2xl px-6 py-2.5',                     // 縮減垂直 Padding，防止推開視窗
       recordBtn: 'text-lg mt-2 pl-2',
-      modalTitle: 'text-3xl font-bold',
-      modalText: 'text-2xl',
-      modalBtn: 'text-xl py-4 px-8 w-36'
+      modalTitle: 'text-2xl font-bold',
+      modalText: 'text-xl',
+      modalBtn: 'text-lg py-3 px-6 w-32'
     }
   };
 
@@ -53,7 +50,6 @@ export default function Home() {
 
   // 3. 初始化：使用者 ID 與本地字體偏好
   useEffect(() => {
-    // 讀取/生成 User ID
     let id = localStorage.getItem('assistant_user_id');
     if (!id) {
       id = 'usr_' + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
@@ -61,7 +57,6 @@ export default function Home() {
     }
     setUserId(id);
 
-    // 讀取字體大小偏好
     const savedSize = localStorage.getItem('app_font_size') as 'small' | 'medium' | 'large';
     if (savedSize) {
       setFontSize(savedSize);
@@ -146,64 +141,52 @@ export default function Home() {
   };
 
   return (
-    // 【重點】使用 fixed inset-0 鎖定手機螢幕尺寸，搭配 overflow-hidden 拒絕外部滾動
-    <div className="fixed inset-0 flex flex-col bg-slate-900 text-white overflow-hidden select-none">
+    // 【極重要修正】使用 h-dvh 鎖定動態視窗高度，搭配 overflow-hidden 確保沒有任何元素能溢出螢幕外
+    <div className="fixed inset-0 h-dvh w-full flex flex-col bg-slate-900 text-white overflow-hidden select-none">
       
       {/* 1. 頂部主導覽列 (不可伸縮 flex-shrink-0) */}
-      <header className="flex-shrink-0 bg-gradient-to-r from-violet-600 to-indigo-600 p-4 shadow-md flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center font-bold text-2xl border border-white/30">
+      <header className="flex-shrink-0 bg-gradient-to-r from-violet-600 to-indigo-600 p-4 shadow-md flex items-center justify-between gap-2">
+        
+        {/* 左側：助理 Logo 與名稱 */}
+        <div className="flex items-center space-x-2 min-w-0">
+          <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center font-bold text-xl border border-white/30 flex-shrink-0">
             🐱
           </div>
-          <div>
-            <h1 className="font-bold text-xl leading-tight">專屬助理</h1>
-            <span className="text-sm text-emerald-300 flex items-center mt-0.5">● 在線中</span>
+          <div className="min-w-0">
+            <h1 className="font-bold text-lg leading-tight truncate">專屬助理</h1>
+            <span className="text-xs text-emerald-300 flex items-center mt-0.5">● 在線中</span>
+          </div>
+        </div>
+
+        {/* 【新增需求 1】中間：下拉式字體選擇選單 */}
+        <div className="relative flex-shrink-0">
+          <select
+            value={fontSize}
+            onChange={(e) => handleFontSizeChange(e.target.value as 'small' | 'medium' | 'large')}
+            className="bg-white/10 text-white border border-white/20 rounded-xl px-2.5 py-1.5 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-white/50 appearance-none pr-8 cursor-pointer"
+          >
+            <option value="small" className="bg-slate-800 text-white">字體：小</option>
+            <option value="medium" className="bg-slate-800 text-white">字體：中</option>
+            <option value="large" className="bg-slate-800 text-white">字體：大</option>
+          </select>
+          {/* 下拉箭頭小圖標 */}
+          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-white/70">
+            <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+              <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/>
+            </svg>
           </div>
         </div>
         
-        {/* 重製對話按鈕 */}
+        {/* 右側：重置對話按鈕 */}
         <button 
           onClick={() => setShowResetModal(true)}
-          className="text-white hover:text-white bg-white/10 px-4 py-2 rounded-full border border-white/20 text-base font-semibold active:scale-95 transition-all"
+          className="text-white hover:text-white bg-white/10 px-3.5 py-1.5 rounded-xl border border-white/20 text-sm font-semibold active:scale-95 transition-all flex-shrink-0"
         >
           重置對話
         </button>
       </header>
 
-      {/* 2. 最上方功能控制列：字體大小切換 (不可伸縮 flex-shrink-0) */}
-      <div className="flex-shrink-0 bg-slate-800/90 px-4 py-2.5 flex items-center justify-between border-b border-slate-700/60">
-        <div className="flex items-center space-x-3 w-full justify-between">
-          <span className="text-sm text-slate-400 font-medium">字體調整：</span>
-          <div className="flex bg-slate-950/80 rounded-xl p-1 border border-slate-700/60 space-x-1">
-            <button 
-              onClick={() => handleFontSizeChange('small')} 
-              className={`px-4 py-1.5 text-sm rounded-lg font-bold transition-all ${
-                fontSize === 'small' ? 'bg-violet-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              小 (16px)
-            </button>
-            <button 
-              onClick={() => handleFontSizeChange('medium')} 
-              className={`px-4 py-1.5 text-sm rounded-lg font-bold transition-all ${
-                fontSize === 'medium' ? 'bg-violet-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              中 (20px)
-            </button>
-            <button 
-              onClick={() => handleFontSizeChange('large')} 
-              className={`px-4 py-1.5 text-sm rounded-lg font-bold transition-all ${
-                fontSize === 'large' ? 'bg-violet-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              大 (30px)
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* 3. 聊天對話區 (唯一可滾動 flex-1 overflow-y-auto) */}
+      {/* 2. 聊天對話區 (可滾動 flex-1 overflow-y-auto) */}
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
         {messages.length === 0 ? (
           <div className="text-center text-slate-500 py-20 text-lg">
@@ -214,7 +197,7 @@ export default function Home() {
             <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className="flex flex-col max-w-[85%] space-y-1">
                 {/* 對話氣泡：套用當前字體大小樣式 */}
-                <div className={`shadow-md transition-all duration-200 ${currentStyle.bubble} ${
+                <div className={`shadow-md transition-all duration-200 break-words ${currentStyle.bubble} ${
                   msg.role === 'user' 
                     ? 'bg-violet-600 text-white rounded-tr-none' 
                     : 'bg-slate-800 text-slate-100 rounded-tl-none border border-slate-700'
@@ -238,8 +221,8 @@ export default function Home() {
         )}
       </div>
 
-      {/* 4. 底部輸入區 (不可伸縮 flex-shrink-0) */}
-      <div className="flex-shrink-0 p-4 border-t border-slate-800 bg-slate-900/90 flex space-x-2 pb-6">
+      {/* 3. 底部輸入區 (鎖定在最下方不可伸縮 flex-shrink-0) */}
+      <div className="flex-shrink-0 p-4 border-t border-slate-800 bg-slate-900/95 flex space-x-2 pb-4 md:pb-6">
         <input
           type="text"
           value={input}
@@ -251,7 +234,7 @@ export default function Home() {
         <button 
           onClick={handleSendMessage}
           disabled={loading}
-          className={`bg-violet-600 hover:bg-violet-500 text-white rounded-full font-bold transition-all active:scale-95 disabled:opacity-50 ${currentStyle.sendBtn}`}
+          className={`bg-violet-600 hover:bg-violet-500 text-white rounded-full font-bold transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center ${currentStyle.sendBtn}`}
         >
           {loading ? '...' : '發送'}
         </button>
