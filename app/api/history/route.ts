@@ -5,41 +5,34 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY!
 );
 
-// 1. 取得指定使用者的歷史對話
+// 1. 取得指定使用者按天存檔的所有歷史對話並打平
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const userId = searchParams.get('userId');
-
-    console.log("======================================");
-    console.log("【歷史對話讀取請求】");
-    console.log("請求讀取的 userId 是:", userId);
 
     if (!userId) {
       return Response.json({ error: '缺少 userId' }, { status: 400 });
     }
 
     const { data, error } = await supabase
-      .from('chat_history')
-      .select('role, content')
+      .from('daily_chat_history')
+      .select('messages')
       .eq('user_id', userId)
-      .order('created_at', { ascending: true });
+      .order('chat_date', { ascending: true });
 
-    if (error) {
-      console.error('❌ 【資料庫錯誤】讀取歷史對話失敗，請檢查 RLS 政策！', error);
-      throw error;
-    }
+    if (error) throw error;
 
-    console.log(`🎯 成功讀取到 ${data?.length || 0} 筆歷史紀錄！`);
-    console.log("======================================");
+    // 將所有天數的對話陣列合併打平成單一陣列傳給前端
+    const flattenedHistory = data ? data.flatMap((day: any) => day.messages) : [];
 
-    return Response.json({ history: data });
+    return Response.json({ history: flattenedHistory });
   } catch (error: any) {
     return Response.json({ error: error.message }, { status: 500 });
   }
 }
 
-// 2. 刪除該使用者的所有對話紀錄 (重製功能)
+// 2. 刪除該使用者的所有每日歸檔檔案
 export async function DELETE(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -50,13 +43,13 @@ export async function DELETE(req: Request) {
     }
 
     const { error } = await supabase
-      .from('chat_history')
+      .from('daily_chat_history')
       .delete()
       .eq('user_id', userId);
 
     if (error) throw error;
 
-    return Response.json({ success: true, message: '對話記憶已清空' });
+    return Response.json({ success: true, message: '歷史歸檔已清空' });
   } catch (error: any) {
     return Response.json({ error: error.message }, { status: 500 });
   }
