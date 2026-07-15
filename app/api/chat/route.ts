@@ -18,74 +18,62 @@ export async function POST(req: Request) {
     const todayStr = new Date().toISOString().split('T')[0];
     const userMsg = { role: 'user', content: message, created_at: new Date().toISOString() };
 
-    // --- 1. 讀取今天「已存在」的對話檔案紀錄 ---
-    let existingTodayMessages: any[] = [];
-    const { data: todayRows, error: fetchTodayError } = await supabase
+    // 🌟 1. 單次查詢：獲取該使用者「所有歷史與今天」的歸檔紀錄（限制最近 15 天以防效能下降）
+    const { data: allHistory, error: fetchHistoryError } = await supabase
       .from('daily_chat_history')
-      .select('messages')
+      .select('chat_date, messages')
       .eq('user_id', userId)
-      .eq('chat_date', todayStr);
-
-    if (fetchTodayError) {
-      console.error("❌ 讀取今日對話檔案失敗:", fetchTodayError);
-    }
-
-    if (todayRows && todayRows.length > 0) {
-      existingTodayMessages = todayRows[0].messages || [];
-    }
-
-    // --- 2. 撈取使用者的大腦偏好規則 ---
-    let { data: instructionsData } = await supabase
-      .from('user_instructions')
-      .select('instruction')
-      .eq('user_id', userId);
-
-    if (!instructionsData || instructionsData.length === 0) {
-      const { data: fallbackData } = await supabase.from('user_instructions').select('instruction').limit(1);
-      if (fallbackData) instructionsData = fallbackData;
-    }
-    const userPreferences = instructionsData && instructionsData.length > 0
-      ? instructionsData.map(i => `- ${i.instruction}`).join('\n')
-      : '無特定偏好。';
-
-    // --- 3. 撈取該使用者最近 3 天的歸檔，當作 Gemini 的上下文 ---
-    const { data: recentDays, error: fetchHistoryError } = await supabase
-      .from('daily_chat_history')
-      .select('messages')
-      .eq('user_id', userId)
-      .order('chat_date', { ascending: false })
-      .limit(3);
+      .order('chat_date', { ascending: true })
+      .limit(15); 
 
     if (fetchHistoryError) {
-      console.error("❌ 撈取歷史歸檔失敗:", fetchHistoryError);
+      console.error("❌ 撈取歷史紀錄失敗:", fetchHistoryError);
     }
 
-    // 歷史日子反轉（舊的在前），並打平成單一歷史陣列
-    let historyData = recentDays
-      ? [...recentDays].reverse().flatMap((day: any) => day.messages || [])
+    // 🌟 2. 從歷史紀錄中找出「今天」已存在的對話（避免重複查詢）
+    const todayRow = allHistory?.find((h: any) => h.chat_date === todayStr);
+    const existingTodayMessages = todayRow ? (todayRow.messages || []) : [];
+
+    // 🌟 3. 打平成單一歷史陣列，作為 Gemini 的上下文（包含之前所有的對話）
+    const historyData = allHistory 
+      ? allHistory.flatMap((day: any) => day.messages || []) 
       : [];
 
     // ⚠️ 把當前最新話語 userMsg 疊加到上下文的最後面送給 Gemini
     const geminiHistory = [...historyData, userMsg];
 
-    // 轉換成 Gemini 格式 (最多傳送最近 20 筆對話，防 Token 爆量)
-    const contents = geminiHistory.slice(-20).map((h: any) => ({
+    // 🌟 4. 撈取「專屬該使用者」的大腦偏好規則（❌ 徹底移除會洩漏他人規則的 Fallback）
+    const { data: instructionsData, error: instError } = await supabase
+      .from('user_instructions')
+      .select('instruction')
+      .eq('user_id', userId);
+
+    if (instError) {
+      console.error("❌ 讀取使用者偏好失敗:", instError);
+    }
+
+    // 如果該使用者還沒有設定大腦，使用內建的基礎溫和預設，絕不撈取別人的資料
+    const userPreferences = instructionsData && instructionsData.length > 0
+      ? instructionsData.map((i: any) => `- ${i.instruction}`).join('\n')
+      : '無特定偏好。請以親切、專業、溫暖的態度回答。';
+
+    // 🌟 5. 轉換成 Gemini 格式 (最多傳送最近 30 筆對話，提供深度的短期與中期記憶)
+    const contents = geminiHistory.slice(-30).map((h: any) => ({
       role: h.role === 'model' ? 'model' : 'user',
       parts: [{ text: h.content }]
     }));
 
-    // --- 4. 設計 System Prompt ---
+    // 🌟 6. 設計 System Prompt
     const systemPrompt = `
 你是一個客製化的專屬 AI 助理。請字字句句嚴格遵守以下使用者的個人偏好大腦規則：
 ---
 【使用者的最高指導大腦規則】
 ${userPreferences}
 ---
-請根據上述規則，並參考先前按天歸檔的歷史對話上下文脈絡，親切地回答問題。
+請根據上述規則，並參考先前的歷史對話上下文脈絡，親切地回答問題。
 `;
 
-    // --- 5. 呼叫 Gemini 取得回答 ---
-    // 使用目前最穩定快速的商業模型 gemini-2.5-flash
+    // 🌟 7. 呼叫 Gemini 取得回答
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash', 
       contents: contents, 
@@ -95,7 +83,7 @@ ${userPreferences}
     const replyText = response.text || "我不太明白...";
     const modelMsg = { role: 'model', content: replyText, created_at: new Date().toISOString() };
 
-    // --- 6. 一氣呵成：將「使用者訊息」與「AI 回應」打包，單次寫入/更新至資料庫 ---
+    // 🌟 8. 將今天的新訊息合併，一氣呵成寫入/更新至資料庫
     const finalMessages = [...existingTodayMessages, userMsg, modelMsg];
     
     const { error: upsertError } = await supabase
