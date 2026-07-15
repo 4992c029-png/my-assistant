@@ -1,53 +1,65 @@
 'use client';
-
-import { useState, useRef, useEffect } from 'react';
-
-interface Message {
-  id: string;
-  role: 'user' | 'model';
-  content: string;
-  showFeedback?: boolean;
-}
+import { useState, useEffect } from 'react';
 
 export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([
-    { id: 'welcome', role: 'model', content: '今天有什麼吩咐嗎？' }
-  ]);
+  const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
+  const [userId, setUserId] = useState('');
   const [loading, setLoading] = useState(false);
-  const [feedbackId, setFeedbackId] = useState<string | null>(null);
-  const [correctionText, setCorrectionText] = useState('');
-  
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const testUserId = '11111111-1111-1111-1111-111111111111';
 
+  // 彈窗控制狀態
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [showRecordModal, setShowRecordModal] = useState(false);
+  const [selectedText, setSelectedText] = useState(''); // 被選中要記錄到大腦的對話內容
+
+  // 1. 初始化唯一使用者 ID
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    let id = localStorage.getItem('assistant_user_id');
+    if (!id) {
+      // 生成簡易隨機 UUID 區分使用者
+      id = 'usr_' + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
+      localStorage.setItem('assistant_user_id', id);
+    }
+    setUserId(id);
+  }, []);
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // 2. 使用者 ID 準備好後，自動從資料庫載入舊的歷史對話
+  useEffect(() => {
+    if (!userId) return;
+    
+    fetch(`/api/history?userId=${userId}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.history) {
+          const formatted = data.history.map((h: any, index: number) => ({
+            id: index.toString(),
+            role: h.role,
+            content: h.content
+          }));
+          setMessages(formatted);
+        }
+      });
+  }, [userId]);
+
+  // 傳送訊息
+  const handleSendMessage = async () => {
     if (!input.trim() || loading) return;
-
-    const userMsgId = Date.now().toString();
-    setMessages(prev => [...prev, { id: userMsgId, role: 'user', content: input }]);
-    setInput('');
     setLoading(true);
+    
+    const userMsg = { id: Date.now().toString(), role: 'user', content: input };
+    setMessages(prev => [...prev, userMsg]);
+    setInput('');
 
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: input, userId: testUserId })
+        body: JSON.stringify({ message: input, userId })
       });
       const data = await res.json();
-      
-      setMessages(prev => [...prev, { 
-        id: Date.now().toString(), 
-        role: 'model', 
-        content: data.reply,
-        showFeedback: true 
-      }]);
+      if (data.reply) {
+        setMessages(prev => [...prev, { id: (Date.now()+1).toString(), role: 'model', content: data.reply }]);
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -55,105 +67,152 @@ export default function Home() {
     }
   };
 
-  const submitCorrection = async () => {
-    if (!correctionText.trim() || !feedbackId) return;
+  // 執行重置 (清空資料庫歷史與前端狀態)
+  const confirmResetHistory = async () => {
+    try {
+      await fetch(`/api/history?userId=${userId}`, { method: 'DELETE' });
+      setMessages([]);
+      setShowResetModal(false);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // 執行將選中的對話寫入個人偏好大腦 (user_instructions)
+  const confirmRecordToBrain = async () => {
     try {
       await fetch('/api/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: testUserId, correction: correctionText })
+        body: JSON.stringify({ userId, correction: selectedText })
       });
-      alert('調整成功！大腦已記錄您的偏好。');
-      setCorrectionText('');
-      setFeedbackId(null);
+      setShowRecordModal(false);
+      alert('成功將此對話寫入大腦規則！🧠');
     } catch (err) {
       console.error(err);
     }
   };
 
   return (
-    <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-50 border-x border-slate-200 shadow-2xl relative">
-      
-      {/* 頂部 APP 導覽列 (確保所有標籤完整) */}
-      <header className="bg-gradient-to-r from-violet-600 to-indigo-600 text-white p-4 shadow-md flex items-center justify-between sticky top-0 z-10">
+    <div className="flex flex-col h-screen bg-slate-900 text-white relative">
+      {/* 頂部導覽列 */}
+      <header className="bg-gradient-to-r from-violet-600 to-indigo-600 p-4 shadow-md flex items-center justify-between sticky top-0 z-10">
         <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center font-bold text-lg border border-white/30"> </div>
+          <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center font-bold text-lg border border-white/30">
+            🐱
+          </div>
           <div>
             <h1 className="font-semibold text-base leading-tight">專屬助理</h1>
             <span className="text-xs text-emerald-300 flex items-center">● 在線中</span>
           </div>
         </div>
+        
+        {/* 右上角重製按鈕：點擊開啟確認彈窗 */}
         <button 
-          className="text-white/80 hover:text-white text-sm bg-white/10 px-3 py-1 rounded-full border border-white/10"
-          onClick={() => setMessages([{ id: 'welcome', role: 'model', content: '記憶已重置，有什麼吩咐嗎？' }])}
+          onClick={() => setShowResetModal(true)}
+          className="text-white/80 hover:text-white bg-white/10 px-3 py-1 rounded-full border border-white/10 text-sm active:scale-95 transition-all"
         >
           重置
         </button>
       </header>
 
-      {/* 對話內容展示區 */}
-      <main className="flex-1 overflow-y-auto p-4 space-y-4 pb-24">
+      {/* 聊天對話區 */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((msg) => (
           <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm text-sm leading-relaxed ${
-              msg.role === 'user' 
-                ? 'bg-gradient-to-br from-violet-500 to-indigo-600 text-white rounded-br-none' 
-                : 'bg-white text-slate-800 rounded-bl-none border border-slate-100'
-            }`}>
-              <p className="whitespace-pre-line">{msg.content}</p>
-              {msg.showFeedback && (
-                <div className="mt-2 pt-2 border-t border-slate-100 flex items-center space-x-3 text-xs text-slate-400">
-                  <span>滿意嗎？</span>
-                  <button className="hover:text-emerald-500 p-1" onClick={() => alert('謝謝！')}>👍 滿意</button>
-                  <button className="hover:text-rose-500 p-1" onClick={() => setFeedbackId(msg.id)}>👎 不滿意</button>
-                </div>
-              )}
+            <div className="flex flex-col max-w-[80%] space-y-1">
+              <div className={`p-3 rounded-2xl text-sm leading-relaxed ${
+                msg.role === 'user' 
+                  ? 'bg-violet-600 text-white rounded-tr-none' 
+                  : 'bg-slate-800 text-slate-100 rounded-tl-none border border-slate-700'
+              }`}>
+                {msg.content}
+              </div>
+              
+              {/* 對話氣泡下方的小功能鍵：點擊跳出紀錄彈窗 */}
+              <button 
+                onClick={() => {
+                  setSelectedText(msg.content);
+                  setShowRecordModal(true);
+                }}
+                className="text-[10px] text-slate-400 self-start hover:text-violet-400 mt-1 pl-1 transition-colors"
+              >
+                📝 記錄至大腦
+              </button>
             </div>
           </div>
         ))}
-        <div ref={messagesEndRef} />
-      </main>
+      </div>
 
-      {/* 彈出式：負評修正輸入框 */}
-      {feedbackId && (
-        <div className="absolute inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl p-5 w-full max-w-sm shadow-2xl">
-            <h3 className="font-bold text-slate-800 mb-2 text-base">🧠 告訴大腦你想怎麼調整？</h3>
-            <textarea 
-              className="w-full border border-slate-200 rounded-xl p-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 mb-4 h-24 resize-none text-slate-800"
-              placeholder="例如：請回答得更簡短一點..."
-              value={correctionText}
-              onChange={(e) => setCorrectionText(e.target.value)}
-            />
-            <div className="flex space-x-3 justify-end text-sm font-medium">
-              <button className="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-xl" onClick={() => setFeedbackId(null)}>取消</button>
-              <button className="px-4 py-2 bg-violet-600 text-white hover:bg-violet-700 rounded-xl shadow-md" onClick={submitCorrection}>寫入記憶</button>
+      {/* 輸入區 */}
+      <div className="p-4 border-t border-slate-800 bg-slate-900 flex space-x-2">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+          placeholder="對助理下達命令吧..."
+          className="flex-1 bg-slate-800 text-white rounded-full px-4 py-2 border border-slate-700 focus:outline-none focus:border-violet-500"
+        />
+        <button 
+          onClick={handleSendMessage}
+          disabled={loading}
+          className="bg-violet-600 hover:bg-violet-500 text-white px-4 py-2 rounded-full font-medium"
+        >
+          {loading ? '...' : '發送'}
+        </button>
+      </div>
+
+      {/* 🚨 彈窗 A：右上角重置確認視窗 */}
+      {showResetModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-xl">
+            <h3 className="text-lg font-semibold text-white mb-2">系統提示</h3>
+            <p className="text-slate-300 text-sm mb-6">是否清空對話記憶？</p>
+            <div className="flex space-x-3 justify-center">
+              <button 
+                onClick={() => setShowResetModal(false)}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-full text-sm w-24"
+              >
+                取消
+              </button>
+              <button 
+                onClick={confirmResetHistory}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-full text-sm w-24 font-medium"
+              >
+                確認清除
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* 置底輸入欄位 */}
-      <footer className="p-3 bg-white border-t border-slate-100 sticky bottom-0 left-0 right-0">
-        <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
-          <input 
-            type="text" 
-            className="flex-1 bg-slate-100 border-0 rounded-full px-4 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:bg-white"
-            placeholder="跟專屬助理說點話..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            disabled={loading}
-          />
-          <button 
-            type="submit" 
-            className={`w-10 h-10 rounded-full flex items-center justify-center text-white ${loading ? 'bg-slate-300' : 'bg-gradient-to-r from-violet-600 to-indigo-600'}`}
-            disabled={loading}
-          >
-            {loading ? '⏳' : '➔'}
-          </button>
-        </form>
-      </footer>
-
+      {/* 🧠 彈窗 B：點擊對話記錄大腦確認視窗 */}
+      {showRecordModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-xl">
+            <h3 className="text-lg font-semibold text-violet-400 mb-2">大腦記憶同步</h3>
+            <p className="text-slate-300 text-xs mb-4 max-h-20 overflow-y-auto bg-slate-900/50 p-2 rounded italic">
+              「{selectedText}」
+            </p>
+            <p className="text-slate-100 text-sm mb-6 font-medium">是否將此內容記錄為您的大腦指導規則？</p>
+            <div className="flex space-x-3 justify-center">
+              <button 
+                onClick={() => setShowRecordModal(false)}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-full text-sm w-24"
+              >
+                不用了
+              </button>
+              <button 
+                onClick={confirmRecordToBrain}
+                className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white rounded-full text-sm w-24 font-medium"
+              >
+                確認記錄
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
