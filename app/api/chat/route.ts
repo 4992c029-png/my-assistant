@@ -87,7 +87,7 @@ export async function POST(req: Request) {
 ${userPreferences}
 ---
 請根據上述規則，並參考先前按天歸檔的歷史對話上下文脈絡，親切地回答問題。
-;
+`;
 
     // --- 5. 呼叫 Gemini 取得回答 ---
     const response = await ai.models.generateContent({
