@@ -15,7 +15,7 @@ export default function Home() {
   const [showRecordModal, setShowRecordModal] = useState(false);
   const [selectedText, setSelectedText] = useState(''); 
 
-  // 2. 比例縮放樣式表 (大字體時優化垂直高度，自適應手機邊緣)
+  // 2. 比例縮放樣式表 (大字體時優化垂直高度與內邊距，自適應手機邊緣)
   const sizeStyles = {
     small: {
       bubble: 'text-base p-2.5 px-4 rounded-2xl',           // ~16px
@@ -168,6 +168,7 @@ export default function Home() {
           visibility: hidden !important;
           opacity: 0 !important;
           pointer-events: none !important;
+          is: null !important;
         }
       `}</style>
       
@@ -243,15 +244,15 @@ export default function Home() {
         )}
       </div>
 
-      {/* 3. 底部輸入區 (🔥 全面加入極致適配、防溢出、防擠壓設定) */}
-      <div className="flex-shrink-0 w-full px-4 py-3 border-t border-slate-800 bg-slate-900/95 flex items-center gap-2 pb-6 md:pb-8 box-border">
+      {/* 3. 底部輸入區 (🔥 w-0 flex-1 與 flex-shrink-0 極致縮排適配，並避開手機 Home 條安全區) */}
+      <div className="flex-shrink-0 w-full px-4 py-3 border-t border-slate-800 bg-slate-900/95 flex items-center gap-2 box-border pb-[calc(env(safe-area-inset-bottom)+12px)]">
         <input
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
           placeholder="對助理下達命令吧..."
-          className={`flex-1 min-w-0 bg-slate-800 text-white rounded-full border border-slate-700 focus:outline-none focus:border-violet-500 transition-all box-border ${currentStyle.input}`}
+          className={`flex-1 w-0 bg-slate-800 text-white rounded-full border border-slate-700 focus:outline-none focus:border-violet-500 transition-all box-border ${currentStyle.input}`}
         />
         <button 
           onClick={handleSendMessage}
