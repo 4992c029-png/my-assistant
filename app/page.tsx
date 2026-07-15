@@ -7,35 +7,80 @@ export default function Home() {
   const [userId, setUserId] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // 1. 字體大小狀態 (預設為 'medium' 中)
+  const [fontSize, setFontSize] = useState<'small' | 'medium' | 'large'>('medium');
+
   // 彈窗控制狀態
   const [showResetModal, setShowResetModal] = useState(false);
   const [showRecordModal, setShowRecordModal] = useState(false);
-  const [selectedText, setSelectedText] = useState(''); // 被選中要記錄到大腦的對話內容
+  const [selectedText, setSelectedText] = useState(''); 
 
-  // 1. 初始化唯一使用者 ID
+  // 2. 比例縮放樣式表 (根據選擇的字體，動態改變所有元件的大小)
+  const sizeStyles = {
+    small: {
+      bubble: 'text-base p-3 px-4 rounded-2xl',           // ~16px
+      btn: 'text-xs py-1 px-2.5 rounded-md',
+      input: 'text-base py-3 px-4',
+      sendBtn: 'text-base px-5 py-3',
+      recordBtn: 'text-xs mt-1 pl-1',
+      modalTitle: 'text-lg font-bold',
+      modalText: 'text-base',
+      modalBtn: 'text-sm py-2 px-4 w-24'
+    },
+    medium: {
+      bubble: 'text-xl p-4.5 px-5 rounded-3xl',          // ~20px
+      btn: 'text-sm py-1.5 px-3 rounded-lg',
+      input: 'text-xl py-4 px-5',
+      sendBtn: 'text-xl px-6 py-4',
+      recordBtn: 'text-sm mt-1.5 pl-1.5',
+      modalTitle: 'text-2xl font-bold',
+      modalText: 'text-xl',
+      modalBtn: 'text-base py-3 px-6 w-28'
+    },
+    large: {
+      bubble: 'text-3xl p-6 px-7 rounded-[2rem]',        // ~30px
+      btn: 'text-lg py-2 px-4 rounded-xl',
+      input: 'text-2xl py-5 px-6',
+      sendBtn: 'text-2xl px-8 py-5',
+      recordBtn: 'text-lg mt-2 pl-2',
+      modalTitle: 'text-3xl font-bold',
+      modalText: 'text-2xl',
+      modalBtn: 'text-xl py-4 px-8 w-36'
+    }
+  };
+
+  const currentStyle = sizeStyles[fontSize];
+
+  // 3. 初始化：使用者 ID 與本地字體偏好
   useEffect(() => {
+    // 讀取/生成 User ID
     let id = localStorage.getItem('assistant_user_id');
     if (!id) {
       id = 'usr_' + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
       localStorage.setItem('assistant_user_id', id);
     }
     setUserId(id);
-    console.log("💡 [前端] 目前的使用者 ID 為:", id);
+
+    // 讀取字體大小偏好
+    const savedSize = localStorage.getItem('app_font_size') as 'small' | 'medium' | 'large';
+    if (savedSize) {
+      setFontSize(savedSize);
+    }
   }, []);
 
-  // 2. 使用者 ID 準備好後，自動從資料庫載入舊的歷史對話 (帶有前端 Console Log 排查)
+  // 4. 變更字體大小並保存
+  const handleFontSizeChange = (size: 'small' | 'medium' | 'large') => {
+    setFontSize(size);
+    localStorage.setItem('app_font_size', size);
+  };
+
+  // 5. 載入舊的歷史對話
   useEffect(() => {
     if (!userId) return;
     
-    console.log(`🔄 [前端] 開始請求讀取歷史對話... userId: ${userId}`);
-    
     fetch(`/api/history?userId=${userId}`)
-      .then(res => {
-        console.log("🔄 [前端] 歷史 API 回應狀態:", res.status);
-        return res.json();
-      })
+      .then(res => res.json())
       .then(data => {
-        console.log("🎯 [前端] 拿到歷史對話原始資料:", data);
         if (data.history) {
           const formatted = data.history.map((h: any, index: number) => ({
             id: index.toString(),
@@ -43,12 +88,9 @@ export default function Home() {
             content: h.content
           }));
           setMessages(formatted);
-          console.log(`✅ [前端] 成功將 ${formatted.length} 筆歷史紀錄載入至畫面上！`);
         }
       })
-      .catch(err => {
-        console.error("❌ [前端] 載入歷史訊息時發生網路或程式錯誤:", err);
-      });
+      .catch(err => console.error("❌ 載入歷史訊息失敗:", err));
   }, [userId]);
 
   // 傳送訊息
@@ -77,7 +119,7 @@ export default function Home() {
     }
   };
 
-  // 執行重置 (清空資料庫歷史與前端狀態)
+  // 執行重置
   const confirmResetHistory = async () => {
     try {
       await fetch(`/api/history?userId=${userId}`, { method: 'DELETE' });
@@ -88,7 +130,7 @@ export default function Home() {
     }
   };
 
-  // 執行將選中的對話寫入個人偏好大腦
+  // 執行將對話寫入大腦
   const confirmRecordToBrain = async () => {
     try {
       await fetch('/api/feedback', {
@@ -104,40 +146,75 @@ export default function Home() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-slate-900 text-white relative">
-      {/* 頂部導覽列 (加大) */}
-      <header className="bg-gradient-to-r from-violet-600 to-indigo-600 p-6 shadow-lg flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center space-x-4">
-          <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center font-bold text-3xl border border-white/30">
+    // 【重點】使用 fixed inset-0 鎖定手機螢幕尺寸，搭配 overflow-hidden 拒絕外部滾動
+    <div className="fixed inset-0 flex flex-col bg-slate-900 text-white overflow-hidden select-none">
+      
+      {/* 1. 頂部主導覽列 (不可伸縮 flex-shrink-0) */}
+      <header className="flex-shrink-0 bg-gradient-to-r from-violet-600 to-indigo-600 p-4 shadow-md flex items-center justify-between">
+        <div className="flex items-center space-x-3">
+          <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center font-bold text-2xl border border-white/30">
             🐱
           </div>
           <div>
-            <h1 className="font-bold text-3xl leading-tight">專屬助理</h1>
-            <span className="text-lg text-emerald-300 flex items-center mt-1">● 在線中</span>
+            <h1 className="font-bold text-xl leading-tight">專屬助理</h1>
+            <span className="text-sm text-emerald-300 flex items-center mt-0.5">● 在線中</span>
           </div>
         </div>
         
-        {/* 右上角重製按鈕 (大按鈕) */}
+        {/* 重製對話按鈕 */}
         <button 
           onClick={() => setShowResetModal(true)}
-          className="text-white hover:text-white bg-white/10 px-6 py-3 rounded-full border-2 border-white/20 text-xl font-medium active:scale-95 transition-all"
+          className="text-white hover:text-white bg-white/10 px-4 py-2 rounded-full border border-white/20 text-base font-semibold active:scale-95 transition-all"
         >
-          重置
+          重置對話
         </button>
       </header>
 
-      {/* 聊天對話區 (加大間距與內容) */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-8">
+      {/* 2. 最上方功能控制列：字體大小切換 (不可伸縮 flex-shrink-0) */}
+      <div className="flex-shrink-0 bg-slate-800/90 px-4 py-2.5 flex items-center justify-between border-b border-slate-700/60">
+        <div className="flex items-center space-x-3 w-full justify-between">
+          <span className="text-sm text-slate-400 font-medium">字體調整：</span>
+          <div className="flex bg-slate-950/80 rounded-xl p-1 border border-slate-700/60 space-x-1">
+            <button 
+              onClick={() => handleFontSizeChange('small')} 
+              className={`px-4 py-1.5 text-sm rounded-lg font-bold transition-all ${
+                fontSize === 'small' ? 'bg-violet-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              小 (16px)
+            </button>
+            <button 
+              onClick={() => handleFontSizeChange('medium')} 
+              className={`px-4 py-1.5 text-sm rounded-lg font-bold transition-all ${
+                fontSize === 'medium' ? 'bg-violet-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              中 (20px)
+            </button>
+            <button 
+              onClick={() => handleFontSizeChange('large')} 
+              className={`px-4 py-1.5 text-sm rounded-lg font-bold transition-all ${
+                fontSize === 'large' ? 'bg-violet-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              大 (30px)
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 3. 聊天對話區 (唯一可滾動 flex-1 overflow-y-auto) */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-6">
         {messages.length === 0 ? (
-          <div className="text-center text-slate-500 py-20 text-xl">
+          <div className="text-center text-slate-500 py-20 text-lg">
             暫無對話紀錄，和助理聊聊天吧！
           </div>
         ) : (
           messages.map((msg) => (
             <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className="flex flex-col max-w-[85%] space-y-2">
-                {/* 對話氣泡：字體放大至 24px (text-2xl)，Padding 放大 */}
-                <div className={`p-5 px-6 rounded-3xl text-2xl leading-relaxed shadow-md ${
+              <div className="flex flex-col max-w-[85%] space-y-1">
+                {/* 對話氣泡：套用當前字體大小樣式 */}
+                <div className={`shadow-md transition-all duration-200 ${currentStyle.bubble} ${
                   msg.role === 'user' 
                     ? 'bg-violet-600 text-white rounded-tr-none' 
                     : 'bg-slate-800 text-slate-100 rounded-tl-none border border-slate-700'
@@ -145,13 +222,13 @@ export default function Home() {
                   {msg.content}
                 </div>
                 
-                {/* 記錄按鈕：加大為 text-lg 好點擊 */}
+                {/* 記錄按鈕：套用當前按鈕大小樣式 */}
                 <button 
                   onClick={() => {
                     setSelectedText(msg.content);
                     setShowRecordModal(true);
                   }}
-                  className="text-lg text-slate-400 self-start hover:text-violet-400 mt-2 pl-2 transition-colors font-medium"
+                  className={`text-slate-400 self-start hover:text-violet-400 transition-colors font-medium ${currentStyle.recordBtn}`}
                 >
                   📝 記錄至大腦
                 </button>
@@ -161,41 +238,41 @@ export default function Home() {
         )}
       </div>
 
-      {/* 輸入區 (全面放大) */}
-      <div className="p-6 border-t border-slate-800 bg-slate-900 flex space-x-3">
+      {/* 4. 底部輸入區 (不可伸縮 flex-shrink-0) */}
+      <div className="flex-shrink-0 p-4 border-t border-slate-800 bg-slate-900/90 flex space-x-2 pb-6">
         <input
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
           placeholder="對助理下達命令吧..."
-          className="flex-1 bg-slate-800 text-white rounded-full px-6 py-5 text-2xl border-2 border-slate-700 focus:outline-none focus:border-violet-500"
+          className={`flex-1 bg-slate-800 text-white rounded-full border border-slate-700 focus:outline-none focus:border-violet-500 transition-all ${currentStyle.input}`}
         />
         <button 
           onClick={handleSendMessage}
           disabled={loading}
-          className="bg-violet-600 hover:bg-violet-500 text-white px-8 py-5 rounded-full text-2xl font-bold transition-all active:scale-95 disabled:opacity-50"
+          className={`bg-violet-600 hover:bg-violet-500 text-white rounded-full font-bold transition-all active:scale-95 disabled:opacity-50 ${currentStyle.sendBtn}`}
         >
           {loading ? '...' : '發送'}
         </button>
       </div>
 
-      {/* 🚨 彈窗 A：右上角重置確認視窗 (超大版) */}
+      {/* 🚨 彈窗 A：右上角重置確認視窗 */}
       {showResetModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center p-6 z-50">
-          <div className="bg-slate-800 border-2 border-slate-700 rounded-3xl p-8 w-full max-w-lg text-center shadow-2xl">
-            <h3 className="text-3xl font-bold text-white mb-4">系統提示</h3>
-            <p className="text-slate-300 text-2xl mb-8">是否清空對話記憶？</p>
-            <div className="flex space-x-4 justify-center">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
+            <h3 className={`${currentStyle.modalTitle} text-white mb-3`}>系統提示</h3>
+            <p className={`${currentStyle.modalText} text-slate-300 mb-6`}>是否清空對話記憶？</p>
+            <div className="flex space-x-3 justify-center">
               <button 
                 onClick={() => setShowResetModal(false)}
-                className="px-8 py-4 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-full text-xl w-36 font-semibold"
+                className={`bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-full font-semibold ${currentStyle.modalBtn}`}
               >
                 取消
               </button>
               <button 
                 onClick={confirmResetHistory}
-                className="px-8 py-4 bg-rose-600 hover:bg-rose-500 text-white rounded-full text-xl w-36 font-bold"
+                className={`bg-rose-600 hover:bg-rose-500 text-white rounded-full font-bold ${currentStyle.modalBtn}`}
               >
                 確認清除
               </button>
@@ -204,25 +281,25 @@ export default function Home() {
         </div>
       )}
 
-      {/* 🧠 彈窗 B：記錄大腦確認視窗 (超大版) */}
+      {/* 🧠 彈窗 B：記錄大腦確認視窗 */}
       {showRecordModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center p-6 z-50">
-          <div className="bg-slate-800 border-2 border-slate-700 rounded-3xl p-8 w-full max-w-lg text-center shadow-2xl">
-            <h3 className="text-3xl font-bold text-violet-400 mb-4">大腦記憶同步</h3>
-            <div className="text-slate-300 text-xl mb-6 max-h-40 overflow-y-auto bg-slate-900/50 p-4 rounded-2xl italic border border-slate-700 text-left">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
+            <h3 className={`${currentStyle.modalTitle} text-violet-400 mb-3`}>大腦記憶同步</h3>
+            <div className="text-slate-300 text-sm mb-4 max-h-24 overflow-y-auto bg-slate-900/50 p-3 rounded-xl italic border border-slate-700 text-left">
               「{selectedText}」
             </div>
-            <p className="text-slate-100 text-2xl mb-8 font-semibold">是否將此內容記錄為您的大腦指導規則？</p>
-            <div className="flex space-x-4 justify-center">
+            <p className={`${currentStyle.modalText} text-slate-100 mb-6 font-semibold`}>是否將此內容記錄為您的大腦指導規則？</p>
+            <div className="flex space-x-3 justify-center">
               <button 
                 onClick={() => setShowRecordModal(false)}
-                className="px-8 py-4 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-full text-xl w-36 font-semibold"
+                className={`bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-full font-semibold ${currentStyle.modalBtn}`}
               >
                 不用了
               </button>
               <button 
                 onClick={confirmRecordToBrain}
-                className="px-8 py-4 bg-violet-600 hover:bg-violet-500 text-white rounded-full text-xl w-36 font-bold"
+                className={`bg-violet-600 hover:bg-violet-500 text-white rounded-full font-bold ${currentStyle.modalBtn}`}
               >
                 確認記錄
               </button>
