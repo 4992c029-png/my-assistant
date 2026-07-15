@@ -11,6 +11,10 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const userId = searchParams.get('userId');
 
+    console.log("======================================");
+    console.log("【歷史對話讀取請求】");
+    console.log("請求讀取的 userId 是:", userId);
+
     if (!userId) {
       return Response.json({ error: '缺少 userId' }, { status: 400 });
     }
@@ -21,7 +25,13 @@ export async function GET(req: Request) {
       .eq('user_id', userId)
       .order('created_at', { ascending: true });
 
-    if (error) throw error;
+    if (error) {
+      console.error('❌ 【資料庫錯誤】讀取歷史對話失敗，請檢查 RLS 政策！', error);
+      throw error;
+    }
+
+    console.log(`🎯 成功讀取到 ${data?.length || 0} 筆歷史紀錄！`);
+    console.log("======================================");
 
     return Response.json({ history: data });
   } catch (error: any) {
