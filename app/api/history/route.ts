@@ -5,7 +5,6 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY!
 );
 
-// 1. 取得指定使用者按天存檔的所有歷史對話並打平
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -23,8 +22,8 @@ export async function GET(req: Request) {
 
     if (error) throw error;
 
-    // 將所有天數的對話陣列合併打平成單一陣列傳給前端
-    const flattenedHistory = data ? data.flatMap((day: any) => day.messages) : [];
+    // 將所有天數的對話陣列合併打平，並加上空陣列安全保護
+    const flattenedHistory = data ? data.flatMap((day: any) => day.messages || []) : [];
 
     return Response.json({ history: flattenedHistory });
   } catch (error: any) {
@@ -32,7 +31,6 @@ export async function GET(req: Request) {
   }
 }
 
-// 2. 刪除該使用者的所有每日歸檔檔案
 export async function DELETE(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
