@@ -160,7 +160,7 @@ export default function Home() {
           type: 'dislike',
           replyContent: activeFeedbackContent,
           correction: dislikeCorrection
-        });
+        })
       });
       if (res.ok) {
         setFeedbackStatus(prev => ({ ...prev, [activeFeedbackMsgId]: 'dislike' }));
