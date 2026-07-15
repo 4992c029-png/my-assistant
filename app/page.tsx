@@ -7,21 +7,28 @@ export default function Home() {
   const [userId, setUserId] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // 1. 字體大小狀態 (預設為 'medium' 中)
+  // 紀錄哪些訊息已經給過反饋 (格式: { messageId: 'like' | 'dislike' })
+  const [feedbackStatus, setFeedbackStatus] = useState<Record<string, 'like' | 'dislike'>>({});
+
+  // 字體大小狀態 (預設為 'medium' 中)
   const [fontSize, setFontSize] = useState<'small' | 'medium' | 'large'>('medium');
 
   // 彈窗控制狀態
   const [showResetModal, setShowResetModal] = useState(false);
-  const [showRecordModal, setShowRecordModal] = useState(false);
-  const [selectedText, setSelectedText] = useState(''); 
+  const [showDislikeModal, setShowDislikeModal] = useState(false);
+  
+  // 正在進行反饋的訊息資料
+  const [activeFeedbackMsgId, setActiveFeedbackMsgId] = useState('');
+  const [activeFeedbackContent, setActiveFeedbackContent] = useState('');
+  const [dislikeCorrection, setDislikeCorrection] = useState('');
 
-  // 2. 比例縮放樣式表 (大字體時優化垂直高度與內邊距，自適應手機邊緣)
+  // 比例縮放樣式表
   const sizeStyles = {
     small: {
       bubble: 'text-base p-2.5 px-4 rounded-2xl',           // ~16px
       input: 'text-base py-2 px-4',
       sendBtn: 'text-base px-4 py-2',
-      recordBtn: 'text-xs mt-1 pl-1',
+      feedbackBtn: 'text-xs mt-1 pl-1 space-x-2',
       modalTitle: 'text-lg font-bold',
       modalText: 'text-base',
       modalBtn: 'text-sm py-2 px-4 w-24'
@@ -30,16 +37,16 @@ export default function Home() {
       bubble: 'text-xl p-3 px-5 rounded-3xl',             // ~20px
       input: 'text-xl py-2 px-4',
       sendBtn: 'text-xl px-5 py-2',
-      recordBtn: 'text-sm mt-1.5 pl-1.5',
+      feedbackBtn: 'text-sm mt-1.5 pl-1.5 space-x-3',
       modalTitle: 'text-2xl font-bold',
       modalText: 'text-xl',
       modalBtn: 'text-base py-2.5 px-5 w-28'
     },
     large: {
-      bubble: 'text-[26px] p-3 px-5 rounded-[1.8rem]',    // ~26px (字體特大)
-      input: 'text-[22px] py-1.5 px-4',                   // 縮小垂直 Padding
-      sendBtn: 'text-[22px] px-5 py-1.5',                 // 縮小垂直 Padding
-      recordBtn: 'text-base mt-1.5 pl-2',
+      bubble: 'text-[26px] p-3 px-5 rounded-[1.8rem]',    // ~26px
+      input: 'text-[22px] py-1.5 px-4',                   
+      sendBtn: 'text-[22px] px-5 py-1.5',                 
+      feedbackBtn: 'text-base mt-1.5 pl-2 space-x-4',
       modalTitle: 'text-2xl font-bold',
       modalText: 'text-lg',
       modalBtn: 'text-base py-2 px-4 w-28'
@@ -48,7 +55,7 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 3. 初始化：使用者 ID 與本地字體偏好
+  // 初始化：使用者 ID 與本地字體偏好
   useEffect(() => {
     let id = localStorage.getItem('assistant_user_id');
     if (!id) {
@@ -63,13 +70,13 @@ export default function Home() {
     }
   }, []);
 
-  // 4. 變更字體大小並保存
+  // 變更字體大小並保存
   const handleFontSizeChange = (size: 'small' | 'medium' | 'large') => {
     setFontSize(size);
     localStorage.setItem('app_font_size', size);
   };
 
-  // 5. 載入舊的歷史對話
+  // 載入舊的歷史對話
   useEffect(() => {
     if (!userId) return;
     
@@ -78,7 +85,7 @@ export default function Home() {
       .then(data => {
         if (data.history) {
           const formatted = data.history.map((h: any, index: number) => ({
-            id: index.toString(),
+            id: `msg_${index}_${h.created_at || Date.now()}`,
             role: h.role,
             content: h.content
           }));
@@ -93,7 +100,7 @@ export default function Home() {
     if (!input.trim() || loading) return;
     setLoading(true);
     
-    const userMsg = { id: Date.now().toString(), role: 'user', content: input };
+    const userMsg = { id: `msg_user_${Date.now()}`, role: 'user', content: input };
     setMessages(prev => [...prev, userMsg]);
     setInput('');
 
@@ -105,7 +112,8 @@ export default function Home() {
       });
       const data = await res.json();
       if (data.reply) {
-        setMessages(prev => [...prev, { id: (Date.now()+1).toString(), role: 'model', content: data.reply }]);
+        const replyId = `msg_model_${Date.now()}`;
+        setMessages(prev => [...prev, { id: replyId, role: 'model', content: data.reply }]);
       }
     } catch (err) {
       console.error(err);
@@ -114,27 +122,62 @@ export default function Home() {
     }
   };
 
-  // 執行重置
+  // 處理 讚 (Like)
+  const handleLike = async (msgId: string, content: string) => {
+    if (feedbackStatus[msgId]) return; // 已評價過則不重複執行
+
+    try {
+      const res = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, type: 'like', replyContent: content })
+      });
+      if (res.ok) {
+        setFeedbackStatus(prev => ({ ...prev, [msgId]: 'like' }));
+      }
+    } catch (err) {
+      console.error("👍 反饋寫入失敗:", err);
+    }
+  };
+
+  // 點擊 踩 (Dislike) - 先開啟彈窗收集意見
+  const handleDislikeClick = (msgId: string, content: string) => {
+    if (feedbackStatus[msgId]) return;
+    setActiveFeedbackMsgId(msgId);
+    setActiveFeedbackContent(content);
+    setDislikeCorrection('');
+    setShowDislikeModal(true);
+  };
+
+  // 確認送出 踩 (Dislike) 意見
+  const confirmDislikeFeedback = async () => {
+    try {
+      const res = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          type: 'dislike',
+          replyContent: activeFeedbackContent,
+          correction: dislikeCorrection
+        });
+      });
+      if (res.ok) {
+        setFeedbackStatus(prev => ({ ...prev, [activeFeedbackMsgId]: 'dislike' }));
+        setShowDislikeModal(false);
+      }
+    } catch (err) {
+      console.error("👎 反饋寫入失敗:", err);
+    }
+  };
+
+  // 執行重置對話
   const confirmResetHistory = async () => {
     try {
       await fetch(`/api/history?userId=${userId}`, { method: 'DELETE' });
       setMessages([]);
+      setFeedbackStatus({});
       setShowResetModal(false);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  // 執行將對話寫入大腦
-  const confirmRecordToBrain = async () => {
-    try {
-      await fetch('/api/feedback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, correction: selectedText })
-      });
-      setShowRecordModal(false);
-      alert('成功將此對話寫入大腦規則！🧠');
     } catch (err) {
       console.error(err);
     }
@@ -158,7 +201,6 @@ export default function Home() {
           overflow: hidden !important;
           position: fixed !important;
         }
-        /* 屏蔽 Vercel Live Preview 懸浮視窗按鈕 */
         #vercel-live-feedback,
         vercel-live-feedback,
         .vercel-live-feedback,
@@ -168,11 +210,10 @@ export default function Home() {
           visibility: hidden !important;
           opacity: 0 !important;
           pointer-events: none !important;
-          is: null !important;
         }
       `}</style>
       
-      {/* 1. 頂部主導覽列 */}
+      {/* 1. 頂部導覽列 */}
       <header className="flex-shrink-0 bg-gradient-to-r from-violet-600 to-indigo-600 p-4 shadow-md flex items-center justify-between gap-2">
         <div className="flex items-center space-x-2 min-w-0">
           <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center font-bold text-xl border border-white/30 flex-shrink-0">
@@ -184,7 +225,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* 中間：下拉式字體選擇選單 */}
+        {/* 下拉式字體選擇選單 */}
         <div className="relative flex-shrink-0">
           <select
             value={fontSize}
@@ -202,7 +243,7 @@ export default function Home() {
           </div>
         </div>
         
-        {/* 右側：重置對話按鈕 */}
+        {/* 重置對話按鈕 */}
         <button 
           onClick={() => setShowResetModal(true)}
           className="text-white hover:text-white bg-white/10 px-3.5 py-1.5 rounded-xl border border-white/20 text-sm font-semibold active:scale-95 transition-all flex-shrink-0"
@@ -229,22 +270,43 @@ export default function Home() {
                   {msg.content}
                 </div>
                 
-                <button 
-                  onClick={() => {
-                    setSelectedText(msg.content);
-                    setShowRecordModal(true);
-                  }}
-                  className={`text-slate-400 self-start hover:text-violet-400 transition-colors font-medium ${currentStyle.recordBtn}`}
-                >
-                  📝 記錄至大腦
-                </button>
+                {/* 🌟 只有 AI (model) 的回覆會顯示大腦反饋按鈕 */}
+                {msg.role === 'model' && (
+                  <div className={`flex items-center text-slate-400 font-medium ${currentStyle.feedbackBtn}`}>
+                    {!feedbackStatus[msg.id] ? (
+                      <>
+                        <button 
+                          onClick={() => handleLike(msg.id, msg.content)}
+                          className="hover:text-emerald-400 active:scale-95 transition-all flex items-center gap-1"
+                        >
+                          👍 滿意
+                        </button>
+                        <span className="text-slate-600">|</span>
+                        <button 
+                          onClick={() => handleDislikeClick(msg.id, msg.content)}
+                          className="hover:text-rose-400 active:scale-95 transition-all flex items-center gap-1"
+                        >
+                          👎 不滿意
+                        </button>
+                      </>
+                    ) : feedbackStatus[msg.id] === 'like' ? (
+                      <span className="text-emerald-400 flex items-center gap-1 animate-pulse">
+                        💚 已記錄滿意回饋，助理學起來了！
+                      </span>
+                    ) : (
+                      <span className="text-rose-400 flex items-center gap-1 animate-pulse">
+                        💔 已記錄不滿意回饋，助理會改進！
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           ))
         )}
       </div>
 
-      {/* 3. 底部輸入區 (🔥 w-0 flex-1 與 flex-shrink-0 極致縮排適配，並避開手機 Home 條安全區) */}
+      {/* 3. 底部輸入區 (w-0 flex-1 防止大字體擠壓，適配手機安全區域) */}
       <div className="flex-shrink-0 w-full px-4 py-3 border-t border-slate-800 bg-slate-900/95 flex items-center gap-2 box-border pb-[calc(env(safe-area-inset-bottom)+12px)]">
         <input
           type="text"
@@ -287,27 +349,33 @@ export default function Home() {
         </div>
       )}
 
-      {/* 🧠 彈窗 B：記錄大腦確認視窗 */}
-      {showRecordModal && (
+      {/* 🧠 彈窗 B：不滿意 (Dislike) 意見收集視窗 */}
+      {showDislikeModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
-            <h3 className={`${currentStyle.modalTitle} text-violet-400 mb-3`}>大腦記憶同步</h3>
-            <div className="text-slate-300 text-sm mb-4 max-h-24 overflow-y-auto bg-slate-900/50 p-3 rounded-xl italic border border-slate-700 text-left">
-              「{selectedText}」
-            </div>
-            <p className={`${currentStyle.modalText} text-slate-100 mb-6 font-semibold`}>是否將此內容記錄為您的大腦指導規則？</p>
+            <h3 className={`${currentStyle.modalTitle} text-rose-400 mb-2`}>幫助助理改進</h3>
+            <p className="text-slate-400 text-sm mb-4">這段回覆哪裡不對呢？（例如：語氣不佳、有錯字、忘記加上特定結尾...）</p>
+            
+            <textarea
+              value={dislikeCorrection}
+              onChange={(e) => setDislikeCorrection(e.target.value)}
+              placeholder="例如：你忘記在結尾加上喵了、請回答得更簡短一點..."
+              rows={3}
+              className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-base focus:outline-none focus:border-violet-500 mb-5 resize-none"
+            />
+            
             <div className="flex space-x-3 justify-center">
               <button 
-                onClick={() => setShowRecordModal(false)}
+                onClick={() => setShowDislikeModal(false)}
                 className={`bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-full font-semibold ${currentStyle.modalBtn}`}
               >
-                不用了
+                取消
               </button>
               <button 
-                onClick={confirmRecordToBrain}
-                className={`bg-violet-600 hover:bg-violet-500 text-white rounded-full font-bold ${currentStyle.modalBtn}`}
+                onClick={confirmDislikeFeedback}
+                className={`bg-rose-600 hover:bg-rose-500 text-white rounded-full font-bold ${currentStyle.modalBtn}`}
               >
-                確認記錄
+                送出修正
               </button>
             </div>
           </div>
