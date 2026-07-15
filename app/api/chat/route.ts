@@ -15,38 +15,26 @@ export async function POST(req: Request) {
       return Response.json({ error: '缺少必要參數' }, { status: 400 });
     }
 
-    // 取得今天的日期字串 (格式: YYYY-MM-DD)
     const todayStr = new Date().toISOString().split('T')[0];
     const userMsg = { role: 'user', content: message, created_at: new Date().toISOString() };
 
-    // --- 1. 先寫入/追加使用者的對話到「今天的歸檔檔案」中 ---
-    let todayMessages = [];
-    let rowId = null;
-
-    const { data: todayRows } = await supabase
+    // --- 1. 讀取今天「已存在」的對話檔案紀錄 ---
+    let existingTodayMessages: any[] = [];
+    const { data: todayRows, error: fetchTodayError } = await supabase
       .from('daily_chat_history')
-      .select('id, messages')
+      .select('messages')
       .eq('user_id', userId)
       .eq('chat_date', todayStr);
 
-    if (todayRows && todayRows.length > 0) {
-      rowId = todayRows[0].id;
-      todayMessages = [...todayRows[0].messages, userMsg];
-      await supabase
-        .from('daily_chat_history')
-        .update({ messages: todayMessages, updated_at: new Date().toISOString() })
-        .eq('id', rowId);
-    } else {
-      todayMessages = [userMsg];
-      const { data: newRow } = await supabase
-        .from('daily_chat_history')
-        .insert({ user_id: userId, chat_date: todayStr, messages: todayMessages })
-        .select('id')
-        .single();
-      rowId = newRow?.id;
+    if (fetchTodayError) {
+      console.error("❌ 讀取今日對話檔案失敗:", fetchTodayError);
     }
 
-    // --- 2. 撈取大腦偏好規則 ---
+    if (todayRows && todayRows.length > 0) {
+      existingTodayMessages = todayRows[0].messages || [];
+    }
+
+    // --- 2. 撈取使用者的大腦偏好規則 ---
     let { data: instructionsData } = await supabase
       .from('user_instructions')
       .select('instruction')
@@ -61,20 +49,27 @@ export async function POST(req: Request) {
       : '無特定偏好。';
 
     // --- 3. 撈取該使用者最近 3 天的歸檔，當作 Gemini 的上下文 ---
-    const { data: recentDays } = await supabase
+    const { data: recentDays, error: fetchHistoryError } = await supabase
       .from('daily_chat_history')
       .select('messages')
       .eq('user_id', userId)
       .order('chat_date', { ascending: false })
       .limit(3);
 
-    // 反轉陣列（讓舊的日子排在前面）並打平成單一的對話歷史陣列
-    const historyData = recentDays
-      ? recentDays.reverse().flatMap((day: any) => day.messages)
+    if (fetchHistoryError) {
+      console.error("❌ 撈取歷史歸檔失敗:", fetchHistoryError);
+    }
+
+    // 歷史日子反轉（舊的在前），並打平成單一歷史陣列
+    let historyData = recentDays
+      ? [...recentDays].reverse().flatMap((day: any) => day.messages || [])
       : [];
 
+    // ⚠️ 把當前最新話語 userMsg 疊加到上下文的最後面送給 Gemini
+    const geminiHistory = [...historyData, userMsg];
+
     // 轉換成 Gemini 格式 (最多傳送最近 20 筆對話，防 Token 爆量)
-    const contents = historyData.slice(-20).map((h: any) => ({
+    const contents = geminiHistory.slice(-20).map((h: any) => ({
       role: h.role === 'model' ? 'model' : 'user',
       parts: [{ text: h.content }]
     }));
@@ -90,8 +85,9 @@ ${userPreferences}
 `;
 
     // --- 5. 呼叫 Gemini 取得回答 ---
+    // 使用目前最穩定快速的商業模型 gemini-2.5-flash
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite', 
+      model: 'gemini-2.5-flash', 
       contents: contents, 
       config: { systemInstruction: systemPrompt },
     });
@@ -99,18 +95,25 @@ ${userPreferences}
     const replyText = response.text || "我不太明白...";
     const modelMsg = { role: 'model', content: replyText, created_at: new Date().toISOString() };
 
-    // --- 6. 將 AI 回應追加到今天的歸檔檔案中 ---
-    const { data: updatedTodayRows } = await supabase
+    // --- 6. 一氣呵成：將「使用者訊息」與「AI 回應」打包，單次寫入/更新至資料庫 ---
+    const finalMessages = [...existingTodayMessages, userMsg, modelMsg];
+    
+    const { error: upsertError } = await supabase
       .from('daily_chat_history')
-      .select('messages')
-      .eq('id', rowId)
-      .single();
+      .upsert(
+        { 
+          user_id: userId, 
+          chat_date: todayStr, 
+          messages: finalMessages, 
+          updated_at: new Date().toISOString() 
+        },
+        { onConflict: 'user_id,chat_date' }
+      );
 
-    const finalMessages = [...(updatedTodayRows?.messages || todayMessages), modelMsg];
-    await supabase
-      .from('daily_chat_history')
-      .update({ messages: finalMessages, updated_at: new Date().toISOString() })
-      .eq('id', rowId);
+    if (upsertError) {
+      console.error("❌ 寫入/更新今日歸檔歷史失敗:", upsertError);
+      return Response.json({ error: "資料庫寫入失敗" }, { status: 500 });
+    }
 
     return Response.json({ reply: replyText });
 
