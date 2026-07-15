@@ -15,7 +15,7 @@ export default function Home() {
   const [showRecordModal, setShowRecordModal] = useState(false);
   const [selectedText, setSelectedText] = useState(''); 
 
-  // 2. 比例縮放樣式表 (最佳化：大字體時縮減垂直高度，防止按鈕跑出版面)
+  // 2. 比例縮放樣式表 (大字體時優化垂直高度，自適應手機邊緣)
   const sizeStyles = {
     small: {
       bubble: 'text-base p-2.5 px-4 rounded-2xl',           // ~16px
@@ -36,9 +36,9 @@ export default function Home() {
       modalBtn: 'text-base py-2.5 px-5 w-28'
     },
     large: {
-      bubble: 'text-[26px] p-3 px-5 rounded-[1.8rem]',    // ~26px (字體特大，但 Padding 收緊)
-      input: 'text-[22px] py-1.5 px-4',                   // 垂直 py 縮小至 1.5，完全杜絕發送按鈕移出
-      sendBtn: 'text-[22px] px-5 py-1.5',                 // 垂直 py 縮小至 1.5，完全杜絕發送按鈕移出
+      bubble: 'text-[26px] p-3 px-5 rounded-[1.8rem]',    // ~26px (字體特大)
+      input: 'text-[22px] py-1.5 px-4',                   // 縮小垂直 Padding
+      sendBtn: 'text-[22px] px-5 py-1.5',                 // 縮小垂直 Padding
       recordBtn: 'text-base mt-1.5 pl-2',
       modalTitle: 'text-2xl font-bold',
       modalText: 'text-lg',
@@ -141,13 +141,15 @@ export default function Home() {
   };
 
   return (
-    // 使用 style 鎖定真實動態 100dvh 高度，防止任何底端溢出
     <div 
       className="fixed inset-0 w-full flex flex-col bg-slate-900 text-white overflow-hidden select-none"
       style={{ height: '100dvh', maxHeight: '100dvh' }}
     >
-      {/* ⚠️ 強制注入 CSS：阻斷手機原生彈性滾動、屏蔽 Vercel 預覽工具列懸浮鈕 */}
+      {/* ⚠️ 強制全域注入：徹底屏蔽 Vercel 懸浮工具列，並設定盒子模型 */}
       <style>{`
+        * {
+          box-sizing: border-box !important;
+        }
         html, body {
           margin: 0 !important;
           padding: 0 !important;
@@ -156,7 +158,7 @@ export default function Home() {
           overflow: hidden !important;
           position: fixed !important;
         }
-        /* 屏蔽 Vercel 懸浮選單按鈕 */
+        /* 屏蔽 Vercel Live Preview 懸浮視窗按鈕 */
         #vercel-live-feedback,
         vercel-live-feedback,
         .vercel-live-feedback,
@@ -171,7 +173,6 @@ export default function Home() {
       
       {/* 1. 頂部主導覽列 */}
       <header className="flex-shrink-0 bg-gradient-to-r from-violet-600 to-indigo-600 p-4 shadow-md flex items-center justify-between gap-2">
-        {/* 左側：助理 Logo 與名稱 */}
         <div className="flex items-center space-x-2 min-w-0">
           <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center font-bold text-xl border border-white/30 flex-shrink-0">
             🐱
@@ -209,7 +210,7 @@ export default function Home() {
         </button>
       </header>
 
-      {/* 2. 聊天對話區 (唯一可滾動區，在 Dvh 下被限制高度) */}
+      {/* 2. 聊天對話區 */}
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
         {messages.length === 0 ? (
           <div className="text-center text-slate-500 py-20 text-lg">
@@ -242,20 +243,20 @@ export default function Home() {
         )}
       </div>
 
-      {/* 3. 底部輸入區 (高度嚴格控制，永不移出畫面) */}
-      <div className="flex-shrink-0 p-3 border-t border-slate-800 bg-slate-900/95 flex space-x-2 pb-5 md:pb-6">
+      {/* 3. 底部輸入區 (🔥 全面加入極致適配、防溢出、防擠壓設定) */}
+      <div className="flex-shrink-0 w-full px-4 py-3 border-t border-slate-800 bg-slate-900/95 flex items-center gap-2 pb-6 md:pb-8 box-border">
         <input
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
           placeholder="對助理下達命令吧..."
-          className={`flex-1 bg-slate-800 text-white rounded-full border border-slate-700 focus:outline-none focus:border-violet-500 transition-all ${currentStyle.input}`}
+          className={`flex-1 min-w-0 bg-slate-800 text-white rounded-full border border-slate-700 focus:outline-none focus:border-violet-500 transition-all box-border ${currentStyle.input}`}
         />
         <button 
           onClick={handleSendMessage}
           disabled={loading}
-          className={`bg-violet-600 hover:bg-violet-500 text-white rounded-full font-bold transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center ${currentStyle.sendBtn}`}
+          className={`flex-shrink-0 bg-violet-600 hover:bg-violet-500 text-white rounded-full font-bold transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center box-border ${currentStyle.sendBtn}`}
         >
           {loading ? '...' : '發送'}
         </button>
