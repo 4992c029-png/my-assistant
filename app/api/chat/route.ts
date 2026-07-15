@@ -15,10 +15,13 @@ export async function POST(req: Request) {
       return Response.json({ error: '缺少必要參數' }, { status: 400 });
     }
 
-    // 1. 將「使用者的話」寫入歷史資料庫
-    await supabase.from('chat_history').insert([
+    // 1. 將「使用者的話」寫入歷史資料庫 (加上報錯偵測)
+    const { error: userInsertError } = await supabase.from('chat_history').insert([
       { user_id: userId, role: 'user', content: message }
     ]);
+    if (userInsertError) {
+      console.error("❌ 【資料庫錯誤】寫入使用者對話歷史失敗！請檢查 chat_history 的 RLS 政策是否開放寫入！", userInsertError);
+    }
 
     // 2. 撈取大腦規則
     let { data: instructionsData } = await supabase
@@ -35,12 +38,16 @@ export async function POST(req: Request) {
       : '無特定偏好。';
 
     // 3. 撈取該使用者最新 20 筆對話歷史當作上下文
-    const { data: historyData } = await supabase
+    const { data: historyData, error: fetchHistoryError } = await supabase
       .from('chat_history')
       .select('role, content')
       .eq('user_id', userId)
       .order('created_at', { ascending: true })
-      .limit(50);
+      .limit(20);
+
+    if (fetchHistoryError) {
+      console.error("❌ 【資料庫錯誤】撈取對話歷史失敗:", fetchHistoryError);
+    }
 
     // 4. 轉換為 Gemini 官方的 Contents 上下文格式
     const contents = historyData && historyData.length > 0
@@ -58,7 +65,7 @@ export async function POST(req: Request) {
 ${userPreferences}
 ---
 請根據上述規則，並參考先前的歷史對話上下文脈絡，親切地回答問題。
-//⚠️ 死命令：如果規則有要求說話口頭禪（如：～喵）或稱呼（如：主人），你必須在回答的每一句話中 100% 徹底執行！
+⚠️ 死命令：如果規則有要求說話口頭禪（如：～喵）或稱呼（如：主人），你必須在回答的每一句話中 100% 徹底執行！
 `;
 
     // 6. 送出對話（包含歷史紀錄）
@@ -70,10 +77,13 @@ ${userPreferences}
 
     const replyText = response.text || "我不太明白...";
 
-    // 7. 將「AI 的回應」寫入歷史資料庫
-    await supabase.from('chat_history').insert([
+    // 7. 將「AI 的回應」寫入歷史資料庫 (加上報錯偵測)
+    const { error: modelInsertError } = await supabase.from('chat_history').insert([
       { user_id: userId, role: 'model', content: replyText }
     ]);
+    if (modelInsertError) {
+      console.error("❌ 【資料庫錯誤】寫入 AI 回應歷史失敗！", modelInsertError);
+    }
 
     return Response.json({ reply: replyText });
 
