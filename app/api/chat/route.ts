@@ -19,13 +19,13 @@ export async function POST(req: Request) {
     const todayStr = new Date().toISOString().split('T')[0];
     const userMsg = { role: 'user', content: message, created_at: new Date().toISOString() };
 
-    // 🌟 1. 單次查詢：獲取該使用者「所有歷史與今天」的歸檔紀錄（限制最近 15 天以防效能下降）
+    // 🌟 1. 單次查詢：獲取該使用者「所有歷史與今天」的歸檔紀錄（極致擴充至最近 180 天）
     const { data: allHistory, error: fetchHistoryError } = await supabase
       .from('daily_chat_history')
       .select('chat_date, messages')
       .eq('user_id', userId)
       .order('chat_date', { ascending: true })
-      .limit(15); 
+      .limit(180); 
 
     if (fetchHistoryError) {
       console.error("❌ 撈取歷史紀錄失敗:", fetchHistoryError);
@@ -58,8 +58,8 @@ export async function POST(req: Request) {
       ? instructionsData.map((i: any) => `- ${i.instruction}`).join('\n')
       : '無特定偏好。請以親切、專業、溫暖的態度回答。';
 
-    // 🌟 5. 轉換成 Gemini 格式 (最多傳送最近 30 筆對話，提供深度的短期與中期記憶)
-    const contents = geminiHistory.slice(-30).map((h: any) => ({
+    // 🌟 5. 轉換成 Gemini 格式 (極致放大：最多傳送最近 500 筆對話，善用 2.0-flash 超大上下文能力)
+    const contents = geminiHistory.slice(-500).map((h: any) => ({
       role: h.role === 'model' ? 'model' : 'user',
       parts: [{ text: h.content }]
     }));
@@ -78,7 +78,7 @@ ${userPreferences}
 請根據上述規則，並參考先前的歷史對話上下文脈絡，親切地回答問題。
 `;
 
-    // 🌟 7. 呼叫 Gemini 取得回答
+    // 🌟 7. 呼叫 Gemini 取得回答 (升級為 gemini-2.0-flash)
     const response = await ai.models.generateContent({
       model: 'gemini-2.0-flash', 
       contents: contents, 
@@ -112,6 +112,24 @@ ${userPreferences}
 
   } catch (error: any) {
     console.error('API 錯誤:', error);
-    return Response.json({ error: error.message || '伺服器內部錯誤' }, { status: 500 });
+
+    const errorMsg = error.message || '';
+    const isQuotaError = 
+      error.status === 429 || 
+      errorMsg.includes('quota') || 
+      errorMsg.includes('Quota exceeded') ||
+      errorMsg.includes('RESOURCE_EXHAUSTED');
+
+    if (isQuotaError) {
+      return Response.json(
+        { 
+          error: 'QUOTA_EXCEEDED', 
+          reply: '⚠️ 抱歉！助理今天工作太過賣力，已經達到 Gemini 免費 API 的每日使用上限。請稍後再試，或聯絡管理員升級為隨用隨付方案。' 
+        }, 
+        { status: 429 }
+      );
+    }
+
+    return Response.json({ error: errorMsg || '伺服器內部錯誤' }, { status: 500 });
   }
 }
