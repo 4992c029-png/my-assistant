@@ -1,10 +1,19 @@
 'use client';
 import { useState, useEffect } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+// 初始化客戶端 Supabase (注意：環境變數需加 NEXT_PUBLIC_ 前綴)
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function Home() {
+  const [user, setUser] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [userId, setUserId] = useState('');
+
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
-  const [userId, setUserId] = useState('');
   const [loading, setLoading] = useState(false);
 
   // 紀錄哪些訊息已經給過反饋 (格式: { messageId: 'like' | 'dislike' })
@@ -13,7 +22,8 @@ export default function Home() {
   // 字體大小狀態 (預設為 'medium' 中)
   const [fontSize, setFontSize] = useState<'small' | 'medium' | 'large'>('medium');
 
-  // 彈窗控制狀態
+  // 彈窗與系統選單控制
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
   const [showDislikeModal, setShowDislikeModal] = useState(false);
   
@@ -22,7 +32,12 @@ export default function Home() {
   const [activeFeedbackContent, setActiveFeedbackContent] = useState('');
   const [dislikeCorrection, setDislikeCorrection] = useState('');
 
-  // 比例縮放樣式表
+  // 🧠 大腦偏好編輯狀態
+  const [instructions, setInstructions] = useState<any[]>([]);
+  const [editingInstructionId, setEditingInstructionId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState('');
+
+  // 比例縮放樣式表 (與齒輪/大腦系統相容)
   const sizeStyles = {
     small: {
       bubble: 'text-base p-2.5 px-4 rounded-2xl',           // ~16px
@@ -55,42 +70,87 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-// 3. 初始化：使用者 ID 與本地字體偏好
+  // 1. 初始化監聽：Google 驗證狀態
   useEffect(() => {
-    let id = localStorage.getItem('assistant_user_id');
-    
-    // 驗證是否符合標準 UUID v4 格式的正則表達式
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    
-    // 🌟 如果還沒有 ID，或者舊的 ID 是不合規的舊格式（例如帶有 "usr_"），就強制重新生成標準 UUID
-    if (!id || !uuidRegex.test(id)) {
-      if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-        id = crypto.randomUUID(); // 現代瀏覽器原生支援的高強度 UUID 產生器
-      } else {
-        // 萬一瀏覽器不支援的原生相容隨機轉譯法
-        id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-          const r = Math.random() * 16 | 0;
-          const v = c === 'x' ? r : (r & 0x3 | 0x8);
-          return v.toString(16);
-        });
+    // 檢查現有 Session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        setUserId(session.user.id);
+        fetchInstructions(session.user.id);
       }
-      localStorage.setItem('assistant_user_id', id);
-    }
-    setUserId(id);
+      setAuthLoading(false);
+    });
 
+    // 監聽 Auth 狀態改變 (例如登入、登出、切換帳號)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        setUserId(session.user.id);
+        fetchInstructions(session.user.id);
+      } else {
+        setUserId('');
+        setInstructions([]);
+        setMessages([]);
+      }
+      setAuthLoading(false);
+    });
+
+    // 讀取本地字體大小偏好
     const savedSize = localStorage.getItem('app_font_size') as 'small' | 'medium' | 'large';
     if (savedSize) {
       setFontSize(savedSize);
     }
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  // 變更字體大小並保存
+  // 2. 獲取大腦偏好規則
+  const fetchInstructions = async (uid: string) => {
+    if (!uid) return;
+    const { data, error } = await supabase
+      .from('user_instructions')
+      .select('*')
+      .eq('user_id', uid)
+      .order('created_at', { ascending: false });
+
+    if (!error && data) {
+      setInstructions(data);
+    }
+  };
+
+  // 3. 處理 Google 登入
+  const handleGoogleLogin = async () => {
+    try {
+      await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin
+        }
+      });
+    } catch (err) {
+      console.error("❌ Google 登入失敗:", err);
+    }
+  };
+
+  // 4. 處理登出 (切換帳號)
+  const handleLogout = async () => {
+    if (!confirm('確認登出並切換不同 Google 帳號嗎？')) return;
+    try {
+      await supabase.auth.signOut();
+      setShowSettingsModal(false);
+    } catch (err) {
+      console.error("❌ 登出失敗:", err);
+    }
+  };
+
+  // 5. 變更字體大小並保存
   const handleFontSizeChange = (size: 'small' | 'medium' | 'large') => {
     setFontSize(size);
     localStorage.setItem('app_font_size', size);
   };
 
-  // 載入舊的歷史對話
+  // 6. 載入對話歷史紀錄
   useEffect(() => {
     if (!userId) return;
     
@@ -109,7 +169,7 @@ export default function Home() {
       .catch(err => console.error("❌ 載入歷史訊息失敗:", err));
   }, [userId]);
 
-  // 傳送訊息
+  // 7. 傳送訊息
   const handleSendMessage = async () => {
     if (!input.trim() || loading) return;
     setLoading(true);
@@ -136,9 +196,9 @@ export default function Home() {
     }
   };
 
-  // 處理 讚 (Like)
+  // 8. 處理 👍 (滿意) 反饋
   const handleLike = async (msgId: string, content: string) => {
-    if (feedbackStatus[msgId]) return; // 已評價過則不重複執行
+    if (feedbackStatus[msgId]) return;
 
     try {
       const res = await fetch('/api/feedback', {
@@ -148,13 +208,14 @@ export default function Home() {
       });
       if (res.ok) {
         setFeedbackStatus(prev => ({ ...prev, [msgId]: 'like' }));
+        fetchInstructions(userId); // 即時更新設定面板內的大腦規則
       }
     } catch (err) {
       console.error("👍 反饋寫入失敗:", err);
     }
   };
 
-  // 點擊 踩 (Dislike) - 先開啟彈窗收集意見
+  // 點擊 👎 (不滿意) 反饋
   const handleDislikeClick = (msgId: string, content: string) => {
     if (feedbackStatus[msgId]) return;
     setActiveFeedbackMsgId(msgId);
@@ -163,7 +224,7 @@ export default function Home() {
     setShowDislikeModal(true);
   };
 
-  // 確認送出 踩 (Dislike) 意見
+  // 確認送出 👎 意見
   const confirmDislikeFeedback = async () => {
     try {
       const res = await fetch('/api/feedback', {
@@ -179,51 +240,125 @@ export default function Home() {
       if (res.ok) {
         setFeedbackStatus(prev => ({ ...prev, [activeFeedbackMsgId]: 'dislike' }));
         setShowDislikeModal(false);
+        fetchInstructions(userId); // 即時更新設定面板內的大腦規則
       }
     } catch (err) {
       console.error("👎 反饋寫入失敗:", err);
     }
   };
 
-  // 執行重置對話
+  // 9. 執行重置對話紀錄
   const confirmResetHistory = async () => {
     try {
       await fetch(`/api/history?userId=${userId}`, { method: 'DELETE' });
       setMessages([]);
       setFeedbackStatus({});
       setShowResetModal(false);
+      setShowSettingsModal(false); // 順便關閉大腦選單
+      alert('已清除當前所有對話記憶！🗑️');
     } catch (err) {
       console.error(err);
     }
   };
 
+  // 10. 大腦偏好規則：刪除整筆規則
+  const handleDeleteInstruction = async (id: string) => {
+    if (!confirm('確認刪除這筆大腦規則嗎？')) return;
+    try {
+      const { error } = await supabase
+        .from('user_instructions')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      setInstructions(prev => prev.filter(item => item.id !== id));
+    } catch (err) {
+      alert('刪除失敗，請再試一次');
+      console.error(err);
+    }
+  };
+
+  // 11. 大腦偏好規則：就地啟用編輯
+  const handleEditClick = (id: string, text: string) => {
+    setEditingInstructionId(id);
+    setEditingText(text);
+  };
+
+  // 12. 大腦偏好規則：儲存編輯修改
+  const handleSaveInstruction = async (id: string) => {
+    if (!editingText.trim()) return;
+    try {
+      const { error } = await supabase
+        .from('user_instructions')
+        .update({ instruction: editingText })
+        .eq('id', id);
+
+      if (error) throw error;
+      setInstructions(prev => prev.map(item => item.id === id ? { ...item, instruction: editingText } : item));
+      setEditingInstructionId(null);
+    } catch (err) {
+      alert('修改失敗，請再試一次');
+      console.error(err);
+    }
+  };
+
+
+  // ----------------------------------------------------
+  // 渲染層：安全載入畫面
+  // ----------------------------------------------------
+  if (authLoading) {
+    return (
+      <div className="fixed inset-0 bg-slate-900 flex flex-col items-center justify-center text-white">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-violet-500 mb-4"></div>
+        <p className="text-slate-400">正在準備您的專屬空間...</p>
+      </div>
+    );
+  }
+
+  // 1. 如果使用者尚未登入 Google 帳號，強制渲染登入閘道器（確保 RLS 正常且資料安全）
+  if (!user) {
+    return (
+      <div className="fixed inset-0 bg-slate-900 flex items-center justify-center p-4">
+        <div className="bg-slate-800 border border-slate-700 rounded-3xl p-8 w-full max-w-md text-center shadow-2xl">
+          <div className="w-20 h-20 rounded-full bg-violet-600/20 flex items-center justify-center text-4xl border border-violet-500/30 mx-auto mb-6">
+            🐱
+          </div>
+          <h1 className="text-3xl font-extrabold text-white mb-2">專屬 AI 助理</h1>
+          <p className="text-slate-400 mb-8 text-base">登入後即可即時同步您的大腦偏好規則與跨裝置對話記憶</p>
+          <button
+            onClick={handleGoogleLogin}
+            className="w-full bg-white text-slate-900 hover:bg-slate-100 font-bold py-3.5 px-6 rounded-full flex items-center justify-center gap-3 active:scale-95 transition-all shadow-md text-lg"
+          >
+            <svg className="w-6 h-6 flex-shrink-0" viewBox="0 0 24 24">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.85z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.85c.87-2.6 3.3-4.53 6.16-4.53z"/>
+            </svg>
+            使用 Google 帳號登入
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. 主功能對話頁面 (使用者登入後渲染)
   return (
     <div 
       className="fixed inset-0 w-full flex flex-col bg-slate-900 text-white overflow-hidden select-none"
       style={{ height: '100dvh', maxHeight: '100dvh' }}
     >
-      {/* ⚠️ 強制全域注入：徹底屏蔽 Vercel 懸浮工具列，並設定盒子模型 */}
       <style>{`
-        * {
-          box-sizing: border-box !important;
-        }
+        * { box-sizing: border-box !important; }
         html, body {
-          margin: 0 !important;
-          padding: 0 !important;
-          width: 100% !important;
-          height: 100% !important;
-          overflow: hidden !important;
-          position: fixed !important;
+          margin: 0 !important; padding: 0 !important;
+          width: 100% !important; height: 100% !important;
+          overflow: hidden !important; position: fixed !important;
         }
-        #vercel-live-feedback,
-        vercel-live-feedback,
-        .vercel-live-feedback,
-        [id^="vercel-"],
-        [class^="vercel-"] {
-          display: none !important;
-          visibility: hidden !important;
-          opacity: 0 !important;
-          pointer-events: none !important;
+        #vercel-live-feedback, vercel-live-feedback, .vercel-live-feedback,
+        [id^="vercel-"], [class^="vercel-"] {
+          display: none !important; visibility: hidden !important;
+          opacity: 0 !important; pointer-events: none !important;
         }
       `}</style>
       
@@ -257,12 +392,16 @@ export default function Home() {
           </div>
         </div>
         
-        {/* 重置對話按鈕 */}
+        {/* 🌟 頂部最右側：齒輪按鈕 (進入系統選單) */}
         <button 
-          onClick={() => setShowResetModal(true)}
-          className="text-white hover:text-white bg-white/10 px-3.5 py-1.5 rounded-xl border border-white/20 text-sm font-semibold active:scale-95 transition-all flex-shrink-0"
+          onClick={() => setShowSettingsModal(true)}
+          className="text-white hover:text-white bg-white/10 p-2.5 rounded-xl border border-white/20 active:scale-95 transition-all flex-shrink-0 flex items-center justify-center"
+          title="系統設定"
         >
-          重置對話
+          <svg className="w-5.5 h-5.5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.43l-1.003.828c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.43l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.991l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28z"/>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
         </button>
       </header>
 
@@ -284,7 +423,6 @@ export default function Home() {
                   {msg.content}
                 </div>
                 
-                {/* 🌟 只有 AI (model) 的回覆會顯示大腦反饋按鈕 */}
                 {msg.role === 'model' && (
                   <div className={`flex items-center text-slate-400 font-medium ${currentStyle.feedbackBtn}`}>
                     {!feedbackStatus[msg.id] ? (
@@ -320,7 +458,7 @@ export default function Home() {
         )}
       </div>
 
-      {/* 3. 底部輸入區 (w-0 flex-1 防止大字體擠壓，適配手機安全區域) */}
+      {/* 3. 底部輸入區 (w-0 flex-1 避開手機邊界與 Home 安全區域) */}
       <div className="flex-shrink-0 w-full px-4 py-3 border-t border-slate-800 bg-slate-900/95 flex items-center gap-2 box-border pb-[calc(env(safe-area-inset-bottom)+12px)]">
         <input
           type="text"
@@ -339,12 +477,141 @@ export default function Home() {
         </button>
       </div>
 
-      {/* 🚨 彈窗 A：右上角重置確認視窗 */}
+      {/* ========================================================
+          ⚙️ 齒輪：系統設定主控制台 (全能型 Modal 視窗)
+          ======================================================== */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 z-40 animate-fade-in">
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
+            {/* 標題列 */}
+            <div className="flex-shrink-0 p-5 border-b border-slate-700 flex justify-between items-center bg-slate-800/50">
+              <h3 className={`${currentStyle.modalTitle} text-violet-400 flex items-center gap-2`}>
+                ⚙️ 系統設定中心
+              </h3>
+              <button 
+                onClick={() => setShowSettingsModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-full bg-slate-700/50"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+
+            {/* 可捲動主內容區 */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-8">
+              {/* 區塊一：Google 使用者帳號狀態 & 登出 */}
+              <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-700/50 flex flex-col gap-3">
+                <div className="flex items-center gap-3">
+                  {user.user_metadata?.avatar_url ? (
+                    <img src={user.user_metadata.avatar_url} alt="avatar" className="w-12 h-12 rounded-full border border-violet-500/50" />
+                  ) : (
+                    <div className="w-12 h-12 rounded-full bg-violet-600/30 flex items-center justify-center text-xl font-bold border border-violet-500/30">
+                      👤
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-slate-200 font-bold truncate leading-snug">{user.user_metadata?.full_name || 'Google 使用者'}</p>
+                    <p className="text-slate-400 text-xs truncate leading-normal">{user.email}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="w-full bg-rose-600/20 hover:bg-rose-600/35 border border-rose-500/30 text-rose-300 font-semibold py-2.5 rounded-lg active:scale-98 transition-all text-sm"
+                >
+                  🚪 登出並切換 Google 帳號
+                </button>
+              </div>
+
+              {/* 區塊二：管理大腦指導規則 (Edit user_instructions) */}
+              <div className="space-y-3">
+                <h4 className="text-base font-bold text-slate-300 flex items-center gap-1.5">
+                  🧠 編輯大腦指導偏好 ({instructions.length})
+                </h4>
+                <div className="space-y-3 max-h-[30vh] overflow-y-auto pr-1">
+                  {instructions.length === 0 ? (
+                    <p className="text-slate-500 text-sm py-4 text-center">尚無大腦規則。在對話中點擊 👍 / 👎 將自動產生規則！</p>
+                  ) : (
+                    instructions.map((inst) => (
+                      <div key={inst.id} className="bg-slate-900/40 border border-slate-700/80 rounded-xl p-3 flex flex-col gap-2">
+                        {editingInstructionId === inst.id ? (
+                          <div className="flex flex-col gap-2">
+                            <textarea
+                              value={editingText}
+                              onChange={(e) => setEditingText(e.target.value)}
+                              className="w-full bg-slate-950 border border-violet-500/50 rounded-lg p-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-violet-500/50 resize-none"
+                              rows={3}
+                            />
+                            <div className="flex justify-end gap-2 text-xs">
+                              <button 
+                                onClick={() => setEditingInstructionId(null)}
+                                className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-md font-medium"
+                              >
+                                取消
+                              </button>
+                              <button 
+                                onClick={() => handleSaveInstruction(inst.id)}
+                                className="bg-violet-600 hover:bg-violet-500 text-white px-3 py-1.5 rounded-md font-semibold"
+                              >
+                                儲存修改
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <p className="text-slate-300 text-sm whitespace-pre-wrap leading-relaxed">{inst.instruction}</p>
+                            <div className="flex justify-end gap-3 text-xs border-t border-slate-800/60 pt-2 text-slate-400">
+                              <button 
+                                onClick={() => handleEditClick(inst.id, inst.instruction)}
+                                className="hover:text-violet-400 flex items-center gap-0.5"
+                              >
+                                📝 編輯
+                              </button>
+                              <button 
+                                onClick={() => handleDeleteInstruction(inst.id)}
+                                className="hover:text-rose-400 flex items-center gap-0.5"
+                              >
+                                🗑️ 刪除
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* 區塊三：對話控制與重製記憶 */}
+              <div className="pt-4 border-t border-slate-700/50">
+                <button
+                  onClick={() => setShowResetModal(true)}
+                  className="w-full bg-amber-600/10 hover:bg-amber-600/20 border border-amber-500/30 text-amber-300 font-semibold py-3 rounded-lg active:scale-98 transition-all text-sm"
+                >
+                  🗑️ 清空歷史對話（保留大腦規則）
+                </button>
+              </div>
+            </div>
+            
+            {/* 底部按鈕 */}
+            <div className="flex-shrink-0 p-4 border-t border-slate-700 bg-slate-900/20 flex justify-end">
+              <button 
+                onClick={() => setShowSettingsModal(false)}
+                className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-2.5 rounded-full font-bold text-sm active:scale-95 transition-all"
+              >
+                完成
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🚨 彈窗 A：清空對話確認 */}
       {showResetModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
             <h3 className={`${currentStyle.modalTitle} text-white mb-3`}>系統提示</h3>
-            <p className={`${currentStyle.modalText} text-slate-300 mb-6`}>是否清空對話記憶？</p>
+            <p className={`${currentStyle.modalText} text-slate-300 mb-6`}>是否要清除該使用者的所有對話記憶？（注意：這會清空所有的歷史聊天，但不會影響您的大腦規則喔！）</p>
             <div className="flex space-x-3 justify-center">
               <button 
                 onClick={() => setShowResetModal(false)}
@@ -363,17 +630,17 @@ export default function Home() {
         </div>
       )}
 
-      {/* 🧠 彈窗 B：不滿意 (Dislike) 意見收集視窗 */}
+      {/* 🧠 彈窗 B：不滿意 (Dislike) 反饋彈窗 */}
       {showDislikeModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
             <h3 className={`${currentStyle.modalTitle} text-rose-400 mb-2`}>幫助助理改進</h3>
-            <p className="text-slate-400 text-sm mb-4">這段回覆哪裡不對呢？（例如：語氣不佳、有錯字、忘記加上特定結尾...）</p>
+            <p className="text-slate-400 text-sm mb-4">這段回覆哪裡不對呢？（例如：語氣太冷淡、忘記加口頭禪、請回答得更簡短...）</p>
             
             <textarea
               value={dislikeCorrection}
               onChange={(e) => setDislikeCorrection(e.target.value)}
-              placeholder="例如：你忘記在結尾加上喵了、請回答得更簡短一點..."
+              placeholder="例如：請記得加上尾音、對話內容太冗長..."
               rows={3}
               className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-base focus:outline-none focus:border-violet-500 mb-5 resize-none"
             />
