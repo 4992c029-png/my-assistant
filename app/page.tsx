@@ -2,18 +2,21 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-// 初始化客戶端 Supabase (加入 explicit 參數確保登入狀態強制儲存於 LocalStorage)
+// 初始化客戶端 Supabase (注意：環境變數需加 NEXT_PUBLIC_ 前綴)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+
+// 🌟 修正 2：強制開啟 Supabase 瀏覽器端 LocalStorage 永久保存登入 session 的設定
 const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    persistSession: true, // 強制啟用 Session 持久化儲存
-    autoRefreshToken: true,
-    detectSessionInUrl: true
+    persistSession: true, // 確保啟用持久化 Session
+    autoRefreshToken: true, // 自動更新 Token
+    detectSessionInUrl: true, // 自動偵測網址中的 token (OAuth)
+    storageKey: 'supabase.auth.token', // 自訂儲存金鑰確保不與其他衝突
   }
 });
 
-// 🌟 UUID 驗證防呆機制（確保使用者 ID 100% 符合 PostgreSQL 的 UUID 格式）
+// UUID 驗證防呆機制（確保使用者 ID 符合 PostgreSQL 的 UUID 格式）
 const isValidUUID = (id: string) => {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   return uuidRegex.test(id);
@@ -23,13 +26,13 @@ export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [userId, setUserId] = useState('');
-  
-  // 🌟 新增：偵測是否在不合適的社群內建瀏覽器（如 FB / IG）
-  const [isInAppBrowser, setIsInAppBrowser] = useState(false);
 
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // 🌟 新增：偵測使用者是否正在使用 LINE / FB 等不支援儲存的 App 內建瀏覽器
+  const [isInAppBrowser, setIsInAppBrowser] = useState(false);
 
   // 紀錄哪些訊息已經給過反饋 (格式: { messageId: 'like' | 'dislike' })
   const [feedbackStatus, setFeedbackStatus] = useState<Record<string, 'like' | 'dislike'>>({});
@@ -85,36 +88,20 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 🌟 清除網址中的 OAuth 認證參數（如 hash 或 search query）
+  // 清除網址中的 OAuth 認證參數
   const clearUrlParams = () => {
     if (typeof window !== 'undefined' && (window.location.search || window.location.hash)) {
       window.history.replaceState(null, '', window.location.pathname);
     }
   };
 
-  // 1. 初始化監聽：防外掛瀏覽器 + Google 驗證狀態 + 格式防呆自我修復 + 清除網址參數
+  // 1. 初始化監聽：Google 驗證狀態 + 格式防呆自我修復 + 清除網址參數 + 偵測內建瀏覽器
   useEffect(() => {
-    // 🌟 核心防禦：偵測是否是在 LINE/FB/IG 內建瀏覽器中開啟
+    // 偵測是否為 App 內建瀏覽器
     if (typeof window !== 'undefined') {
-      const ua = navigator.userAgent || '';
-      const isLine = /Line/i.test(ua);
-      const isFb = /FBAN|FBAV/i.test(ua);
-      const isInstagram = /Instagram/i.test(ua);
-      const isWeChat = /MicroMessenger/i.test(ua);
-      const isInApp = isLine || isFb || isInstagram || isWeChat;
-
-      if (isLine && !window.location.search.includes('openExternalBrowser')) {
-        // 🚀 LINE 專用魔法跳轉：強制用系統預設瀏覽器（Safari/Chrome）重新開啟
-        window.location.href = window.location.origin + window.location.pathname + '?openExternalBrowser=1';
-        return;
-      }
-
-      // 如果是 FB, IG 或微信，則顯示全螢幕導引提示遮罩
-      if (isInApp && !isLine) {
-        setIsInAppBrowser(true);
-        setAuthLoading(false);
-        return;
-      }
+      const ua = navigator.userAgent.toLowerCase();
+      const isInApp = ua.includes('line') || ua.includes('fban') || ua.includes('fbav') || ua.includes('micromessenger') || ua.includes('instagram');
+      setIsInAppBrowser(isInApp);
     }
 
     // 檢查現有 Session
@@ -125,7 +112,7 @@ export default function Home() {
           setUser(currentUser);
           setUserId(currentUser.id);
           fetchInstructions(currentUser.id);
-          clearUrlParams(); // 成功獲取 Session 後立即清除網址雜訊
+          clearUrlParams(); 
         } else {
           console.error("❌ 偵測到非標準 UUID 的使用者 ID，強制登出以重置快取:", currentUser.id);
           supabase.auth.signOut();
@@ -147,7 +134,7 @@ export default function Home() {
           setUser(currentUser);
           setUserId(currentUser.id);
           fetchInstructions(currentUser.id);
-          clearUrlParams(); // 登入狀態變更確認後，再次確保網址乾淨
+          clearUrlParams(); 
         } else {
           console.error("❌ 偵測到非標準 UUID 的使用者 ID，強制登出以重置快取:", currentUser.id);
           supabase.auth.signOut();
@@ -173,7 +160,7 @@ export default function Home() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // 2. 獲取大腦偏好規則
+  // 2. 獲取大腦偏好規則 (防呆)
   const fetchInstructions = async (uid: string) => {
     if (!uid || !isValidUUID(uid)) return;
     const { data, error } = await supabase
@@ -264,7 +251,7 @@ export default function Home() {
     }
   };
 
-  // 8. 處理 👍 (滿意) 反饋
+  // 8. 處理 👍 反饋
   const handleLike = async (msgId: string, content: string) => {
     if (feedbackStatus[msgId] || !isValidUUID(userId)) return;
 
@@ -276,14 +263,14 @@ export default function Home() {
       });
       if (res.ok) {
         setFeedbackStatus(prev => ({ ...prev, [msgId]: 'like' }));
-        fetchInstructions(userId);
+        fetchInstructions(userId); 
       }
     } catch (err) {
       console.error("👍 反饋寫入失敗:", err);
     }
   };
 
-  // 點擊 👎 (不滿意) 反饋
+  // 點擊 👎 反饋
   const handleDislikeClick = (msgId: string, content: string) => {
     if (feedbackStatus[msgId]) return;
     setActiveFeedbackMsgId(msgId);
@@ -309,7 +296,7 @@ export default function Home() {
       if (res.ok) {
         setFeedbackStatus(prev => ({ ...prev, [activeFeedbackMsgId]: 'dislike' }));
         setShowDislikeModal(false);
-        fetchInstructions(userId);
+        fetchInstructions(userId); 
       }
     } catch (err) {
       console.error("👎 反饋寫入失敗:", err);
@@ -324,7 +311,7 @@ export default function Home() {
       setMessages([]);
       setFeedbackStatus({});
       setShowResetModal(false);
-      setShowSettingsModal(false);
+      setShowSettingsModal(false); 
       alert('已清除當前所有對話記憶！🗑️');
     } catch (err) {
       console.error(err);
@@ -339,7 +326,7 @@ export default function Home() {
         .from('user_instructions')
         .delete()
         .eq('id', id)
-        .eq('user_id', userId);
+        .eq('user_id', userId); 
 
       if (error) throw error;
       setInstructions(prev => prev.filter(item => item.id !== id));
@@ -363,7 +350,7 @@ export default function Home() {
         .from('user_instructions')
         .update({ instruction: editingText })
         .eq('id', id)
-        .eq('user_id', userId);
+        .eq('user_id', userId); 
 
       if (error) throw error;
       setInstructions(prev => prev.map(item => item.id === id ? { ...item, instruction: editingText } : item));
@@ -406,34 +393,22 @@ export default function Home() {
         }
       `}</style>
       
-      {/* 🌟 彈窗 C：非 LINE 的社群瀏覽器警告遮罩 */}
-      {isInAppBrowser && (
-        <div className="fixed inset-0 bg-slate-950/95 z-50 flex flex-col items-center justify-center p-6 text-center">
-          <div className="w-20 h-20 rounded-full bg-amber-500/10 flex items-center justify-center text-4xl border border-amber-500/30 mb-6 animate-bounce">
-            ⚠️
-          </div>
-          <h3 className="text-2xl font-extrabold text-amber-400 mb-3">請使用系統瀏覽器開啟</h3>
-          <p className="text-slate-300 text-base max-w-sm mb-6 leading-relaxed">
-            偵測到您目前正使用<strong>社群軟體內建瀏覽器</strong>。<br />
-            這會導致：
-          </p>
-          <ul className="text-left text-slate-400 text-sm space-y-2 max-w-xs mx-auto mb-8 bg-slate-900 p-4 rounded-xl border border-slate-800">
-            <li className="flex items-start gap-2">❌ <strong>無法保持登入</strong>（每次關閉都需要重登）</li>
-            <li className="flex items-start gap-2">❌ <strong>上方網頁列無法隱藏</strong>（排版不全、干擾畫面）</li>
-          </ul>
-          <div className="bg-violet-600 text-white font-bold py-3.5 px-6 rounded-full text-base animate-pulse shadow-lg">
-            請點擊右上角「 ⁝ 」或「 ... 」<br />
-            並選擇「在瀏覽器中開啟」
-          </div>
-        </div>
-      )}
-
       {!user ? (
         /* ========================================================
             🐱 登入畫面：採用原先乾淨、置中的簡單配置
             ======================================================== */
-        <div className="flex-1 flex items-center justify-center p-4">
+        <div className="flex-1 flex flex-col items-center justify-center p-6">
           <div className="bg-slate-800 border border-slate-700 rounded-3xl p-8 w-full max-w-md text-center shadow-2xl">
+            
+            {/* 🌟 修正 1 & 2：如果是內建瀏覽器，顯示友善提示引導，排除無法保存登入的痛點 */}
+            {isInAppBrowser && (
+              <div className="bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm p-4 rounded-2xl mb-6 text-left leading-relaxed">
+                <span className="font-bold">⚠️ 偵測到內建瀏覽器：</span><br />
+                您目前正在 App (如 LINE / FB) 內開啟此頁面。這會導致<strong>每次關閉程式後都要重新登入</strong>。<br />
+                <span className="text-amber-400 font-semibold">💡 解決方法：</span>請點擊右上角或右下角的選單（<code>...</code>），選擇<strong>「在外部瀏覽器中開啟」</strong>（Chrome/Safari）。在系統瀏覽器登入後，即可永久保持登入，並能「新增至主畫面」徹底隱藏最上方的網頁控制列喔！
+              </div>
+            )}
+
             <div className="w-20 h-20 rounded-full bg-violet-600/20 flex items-center justify-center text-4xl border border-violet-500/30 mx-auto mb-6">
               🐱
             </div>
@@ -488,15 +463,26 @@ export default function Home() {
               </div>
             </div>
             
-            {/* 🌟 頂部最右側：齒輪按鈕 */}
+            {/* 🌟 修正 3：更換為高相容、完美圓形、保證渲染出的「齒輪圖片」設定按鈕 */}
             <button 
               onClick={() => setShowSettingsModal(true)}
-              className="text-white hover:text-white bg-white/10 p-2.5 rounded-xl border border-white/20 active:scale-95 transition-all flex-shrink-0 flex items-center justify-center"
+              className="text-white hover:text-white bg-white/10 hover:bg-white/20 p-2.5 rounded-full border border-white/20 active:scale-95 transition-all flex-shrink-0 flex items-center justify-center w-10 h-10"
               title="系統設定"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.43l-1.003.828c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.43l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.991l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28z"/>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+              <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                width="20" 
+                height="20" 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2.5" 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                className="w-5 h-5 text-white"
+              >
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
             </button>
           </header>
