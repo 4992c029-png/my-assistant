@@ -6,20 +6,50 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-// 🌟 修正點 2：建立安全、僅在客戶端初始化的 Supabase 單例，確保完美對接 window.localStorage，解決登入遺失問題
+// 🌟 輔助函式：Cookie 讀寫 (用來作為 Session 的雙重物理備份，防止 App 關閉後快取被清除)
+const setSessionCookie = (sessionData: any) => {
+  if (typeof document === 'undefined') return;
+  const expires = new Date();
+  expires.setTime(expires.getTime() + 30 * 24 * 60 * 60 * 1000); // 保持 30 天
+  document.cookie = `sb-backup-session=${encodeURIComponent(JSON.stringify(sessionData))};expires=${expires.toUTCString()};path=/;SameSite=Lax;Secure`;
+};
+
+const getSessionCookie = (): any | null => {
+  if (typeof document === 'undefined') return null;
+  const nameEQ = "sb-backup-session=";
+  const ca = document.cookie.split(';');
+  for (let i = 0; i < ca.length; i++) {
+    let c = ca[i];
+    while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+    if (c.indexOf(nameEQ) === 0) {
+      try {
+        return JSON.parse(decodeURIComponent(c.substring(nameEQ.length, c.length)));
+      } catch (e) {
+        return null;
+      }
+    }
+  }
+  return null;
+};
+
+const eraseSessionCookie = () => {
+  if (typeof document === 'undefined') return;
+  document.cookie = "sb-backup-session=; Max-Age=-99999999;path=/;";
+};
+
+// 僅在客戶端安全初始化 Supabase
 const supabase = typeof window !== 'undefined' 
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
-        persistSession: true,               // 啟用長效登入持久化
-        storageKey: 'sb-assistant-session', // 自訂儲存 Key 避免衝突
-        storage: window.localStorage,       // 強制儲存於 LocalStorage
-        autoRefreshToken: true,             // 自動刷新 Token
-        detectSessionInUrl: true            // 自動偵測 OAuth 回調
+        persistSession: true,
+        storageKey: 'sb-assistant-session',
+        storage: window.localStorage,
+        autoRefreshToken: true,
+        detectSessionInUrl: true
       }
     })
   : null;
 
-// 放寬 UUID 驗證，容許所有版本的 UUID (包括本地測試帳號 0000...0000)
 const isValidUUID = (id: string) => {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   return uuidRegex.test(id);
@@ -81,7 +111,6 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 延遲清除網址參數，確保 Session 已寫入
   const clearUrlParams = () => {
     if (typeof window !== 'undefined' && (window.location.search || window.location.hash)) {
       setTimeout(() => {
@@ -97,24 +126,45 @@ export default function Home() {
       return;
     }
 
-    // 獲取初始 Session，確保重新開啟程式時可直接自動登入
     const initSession = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        // 先嘗試從 Supabase 內建 LocalStorage 讀取
+        let { data: { session } } = await supabase.auth.getSession();
+        
+        // 🌟 修正點 2：如果 LocalStorage 為空，啟動 Cookie 雙重防禦恢復機制
+        if (!session) {
+          const backup = getSessionCookie();
+          if (backup && backup.access_token && backup.refresh_token) {
+            console.log("🔄 偵測到 LocalStorage 被清除，正從 Cookie 恢復登入狀態...");
+            const { data, error } = await supabase.auth.setSession({
+              access_token: backup.access_token,
+              refresh_token: backup.refresh_token
+            });
+            if (!error && data.session) {
+              session = data.session;
+            }
+          }
+        }
+
         const currentUser = session?.user ?? null;
         if (currentUser) {
           if (isValidUUID(currentUser.id)) {
             setUser(currentUser);
             setUserId(currentUser.id);
             fetchInstructions(currentUser.id);
+            // 登入成功時，同步將 Session 寫入 Cookie 備份
+            setSessionCookie({
+              access_token: session?.access_token,
+              refresh_token: session?.refresh_token
+            });
             clearUrlParams(); 
           } else {
-            console.error("❌ 非標準 UUID，登出安全重置:", currentUser.id);
             await supabase.auth.signOut();
+            eraseSessionCookie();
           }
         }
       } catch (err) {
-        console.error("❌ 獲取登入 Session 失敗:", err);
+        console.error("❌ 初始化 Session 失敗:", err);
       } finally {
         setAuthLoading(false);
       }
@@ -122,7 +172,7 @@ export default function Home() {
 
     initSession();
 
-    // 監聽登入與登出事件
+    // 監聽登入狀態改變
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       const currentUser = session?.user ?? null;
       if (currentUser) {
@@ -130,15 +180,22 @@ export default function Home() {
           setUser(currentUser);
           setUserId(currentUser.id);
           fetchInstructions(currentUser.id);
+          // 狀態變更時，隨時同步最新 Token 至 Cookie 備份
+          setSessionCookie({
+            access_token: session?.access_token,
+            refresh_token: session?.refresh_token
+          });
           clearUrlParams(); 
         } else {
           await supabase.auth.signOut();
+          eraseSessionCookie();
           setUser(null);
           setUserId('');
           setInstructions([]);
           setMessages([]);
         }
       } else {
+        eraseSessionCookie(); // 登出時徹底清除 Cookie
         setUser(null);
         setUserId('');
         setInstructions([]);
@@ -186,6 +243,7 @@ export default function Home() {
     if (!supabase) return;
     if (!confirm('確認登出並切換不同 Google 帳號嗎？')) return;
     try {
+      eraseSessionCookie(); // 登出清除備份
       await supabase.auth.signOut();
       setShowSettingsModal(false);
     } catch (err) {
@@ -357,7 +415,6 @@ export default function Home() {
   }
 
   return (
-    // 🌟 修正點 4：加上 'notranslate' class 避免任何翻譯外掛干擾
     <div 
       className="fixed inset-0 w-full flex flex-col bg-slate-900 text-white overflow-hidden select-none notranslate"
       style={{ height: '100dvh', maxHeight: '100dvh' }}
@@ -368,6 +425,7 @@ export default function Home() {
           margin: 0 !important; padding: 0 !important;
           width: 100% !important; height: 100% !important;
           overflow: hidden !important; position: fixed !important;
+          overscroll-behavior-y: contain !important; /* 🌟 防止手機端下拉重新整理拉出網址列 */
         }
         #vercel-live-feedback, vercel-live-feedback, .vercel-live-feedback,
         [id^="vercel-"], [class^="vercel-"] {
@@ -401,7 +459,7 @@ export default function Home() {
       ) : (
         <>
           {/* 1. 頂部導覽列 */}
-          <header className="flex-shrink-0 bg-gradient-to-r from-violet-600 to-indigo-600 p-4 shadow-md flex items-center justify-between gap-2">
+          <header className="flex-shrink-0 bg-gradient-to-r from-violet-600 to-indigo-600 p-4 shadow-md flex items-center justify-between gap-2 pt-[calc(env(safe-area-inset-top)+12px)]">
             <div className="flex items-center space-x-2 min-w-0">
               <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center font-bold text-xl border border-white/30 flex-shrink-0">
                 🐱
@@ -429,14 +487,14 @@ export default function Home() {
               </div>
             </div>
             
-            {/* 🌟 修正點 3：右上角系統設定，修改顯示為高解析度、乾淨的「齒輪圖片」 */}
+            {/* 🌟 修正點 3：標準化寬高（w-6 h-6）高畫質 SVG 齒輪圖案，並加入精緻的 hover 旋轉與圓角 */}
             <button 
               onClick={() => setShowSettingsModal(true)}
-              className="text-white hover:text-violet-200 hover:bg-white/20 bg-white/10 p-2.5 rounded-xl border border-white/25 active:scale-95 transition-all flex-shrink-0 flex items-center justify-center"
+              className="text-white hover:text-violet-200 hover:bg-white/20 bg-white/10 p-2 rounded-xl border border-white/20 active:scale-95 transition-all flex-shrink-0 flex items-center justify-center group"
               title="系統設定"
             >
               <svg 
-                className="w-5.5 h-5.5 animate-hover-spin" 
+                className="w-6 h-6 transition-transform duration-500 ease-out group-hover:rotate-90" 
                 fill="none" 
                 stroke="currentColor" 
                 strokeWidth="2.2" 
