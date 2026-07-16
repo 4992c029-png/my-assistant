@@ -2,21 +2,20 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-// 初始化客戶端 Supabase (注意：環境變數需加 NEXT_PUBLIC_ 前綴)
+// 初始化客戶端 Supabase 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-// 🌟 修正 2：強制開啟 Supabase 瀏覽器端 LocalStorage 永久保存登入 session 的設定
+// 🌟 修正：顯式加入持久化儲存設定，確保登入狀態不遺失
 const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    persistSession: true, // 確保啟用持久化 Session
-    autoRefreshToken: true, // 自動更新 Token
-    detectSessionInUrl: true, // 自動偵測網址中的 token (OAuth)
-    storageKey: 'supabase.auth.token', // 自訂儲存金鑰確保不與其他衝突
+    persistSession: true,      // 啟用 Session 持久化 (存在 LocalStorage)
+    autoRefreshToken: true,    // 自動刷新 Token
+    detectSessionInUrl: true   // 自動偵測 OAuth 重新導向的 Session
   }
 });
 
-// UUID 驗證防呆機制（確保使用者 ID 符合 PostgreSQL 的 UUID 格式）
+// UUID 驗證防呆機制
 const isValidUUID = (id: string) => {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   return uuidRegex.test(id);
@@ -31,34 +30,24 @@ export default function Home() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // 🌟 新增：偵測使用者是否正在使用 LINE / FB 等不支援儲存的 App 內建瀏覽器
-  const [isInAppBrowser, setIsInAppBrowser] = useState(false);
-
-  // 紀錄哪些訊息已經給過反饋 (格式: { messageId: 'like' | 'dislike' })
   const [feedbackStatus, setFeedbackStatus] = useState<Record<string, 'like' | 'dislike'>>({});
-
-  // 字體大小狀態 (預設為 'medium' 中)
   const [fontSize, setFontSize] = useState<'small' | 'medium' | 'large'>('medium');
 
-  // 彈窗與系統選單控制
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
   const [showDislikeModal, setShowDislikeModal] = useState(false);
   
-  // 正在進行反饋的訊息資料
   const [activeFeedbackMsgId, setActiveFeedbackMsgId] = useState('');
   const [activeFeedbackContent, setActiveFeedbackContent] = useState('');
   const [dislikeCorrection, setDislikeCorrection] = useState('');
 
-  // 🧠 大腦偏好編輯狀態
   const [instructions, setInstructions] = useState<any[]>([]);
   const [editingInstructionId, setEditingInstructionId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
 
-  // 比例縮放樣式表
   const sizeStyles = {
     small: {
-      bubble: 'text-base p-2.5 px-4 rounded-2xl',           // ~16px
+      bubble: 'text-base p-2.5 px-4 rounded-2xl',
       input: 'text-base py-2 px-4',
       sendBtn: 'text-base px-4 py-2',
       feedbackBtn: 'text-xs mt-1 pl-1 space-x-2',
@@ -67,7 +56,7 @@ export default function Home() {
       modalBtn: 'text-sm py-2 px-4 w-24'
     },
     medium: {
-      bubble: 'text-xl p-3 px-5 rounded-3xl',             // ~20px
+      bubble: 'text-xl p-3 px-5 rounded-3xl',
       input: 'text-xl py-2 px-4',
       sendBtn: 'text-xl px-5 py-2',
       feedbackBtn: 'text-sm mt-1.5 pl-1.5 space-x-3',
@@ -76,7 +65,7 @@ export default function Home() {
       modalBtn: 'text-base py-2.5 px-5 w-28'
     },
     large: {
-      bubble: 'text-[26px] p-3 px-5 rounded-[1.8rem]',    // ~26px
+      bubble: 'text-[26px] p-3 px-5 rounded-[1.8rem]',
       input: 'text-[22px] py-1.5 px-4',                    
       sendBtn: 'text-[22px] px-5 py-1.5',                  
       feedbackBtn: 'text-base mt-1.5 pl-2 space-x-4',
@@ -95,16 +84,8 @@ export default function Home() {
     }
   };
 
-  // 1. 初始化監聽：Google 驗證狀態 + 格式防呆自我修復 + 清除網址參數 + 偵測內建瀏覽器
+  // 1. 初始化監聽
   useEffect(() => {
-    // 偵測是否為 App 內建瀏覽器
-    if (typeof window !== 'undefined') {
-      const ua = navigator.userAgent.toLowerCase();
-      const isInApp = ua.includes('line') || ua.includes('fban') || ua.includes('fbav') || ua.includes('micromessenger') || ua.includes('instagram');
-      setIsInAppBrowser(isInApp);
-    }
-
-    // 檢查現有 Session
     supabase.auth.getSession().then(({ data: { session } }) => {
       const currentUser = session?.user ?? null;
       if (currentUser) {
@@ -126,7 +107,6 @@ export default function Home() {
       setAuthLoading(false);
     });
 
-    // 監聽 Auth 狀態改變
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       const currentUser = session?.user ?? null;
       if (currentUser) {
@@ -151,7 +131,6 @@ export default function Home() {
       setAuthLoading(false);
     });
 
-    // 讀取本地字體大小偏好
     const savedSize = localStorage.getItem('app_font_size') as 'small' | 'medium' | 'large';
     if (savedSize) {
       setFontSize(savedSize);
@@ -160,7 +139,6 @@ export default function Home() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // 2. 獲取大腦偏好規則 (防呆)
   const fetchInstructions = async (uid: string) => {
     if (!uid || !isValidUUID(uid)) return;
     const { data, error } = await supabase
@@ -174,7 +152,6 @@ export default function Home() {
     }
   };
 
-  // 3. 處理 Google 登入
   const handleGoogleLogin = async () => {
     try {
       await supabase.auth.signInWithOAuth({
@@ -188,7 +165,6 @@ export default function Home() {
     }
   };
 
-  // 4. 處理登出
   const handleLogout = async () => {
     if (!confirm('確認登出並切換不同 Google 帳號嗎？')) return;
     try {
@@ -199,13 +175,11 @@ export default function Home() {
     }
   };
 
-  // 5. 變更字體大小並保存
   const handleFontSizeChange = (size: 'small' | 'medium' | 'large') => {
     setFontSize(size);
     localStorage.setItem('app_font_size', size);
   };
 
-  // 6. 載入對話歷史紀錄
   useEffect(() => {
     if (!userId || !isValidUUID(userId)) return;
     
@@ -224,7 +198,6 @@ export default function Home() {
       .catch(err => console.error("❌ 載入歷史訊息失敗:", err));
   }, [userId]);
 
-  // 7. 傳送訊息
   const handleSendMessage = async () => {
     if (!input.trim() || loading || !isValidUUID(userId)) return;
     setLoading(true);
@@ -251,7 +224,6 @@ export default function Home() {
     }
   };
 
-  // 8. 處理 👍 反饋
   const handleLike = async (msgId: string, content: string) => {
     if (feedbackStatus[msgId] || !isValidUUID(userId)) return;
 
@@ -270,7 +242,6 @@ export default function Home() {
     }
   };
 
-  // 點擊 👎 反饋
   const handleDislikeClick = (msgId: string, content: string) => {
     if (feedbackStatus[msgId]) return;
     setActiveFeedbackMsgId(msgId);
@@ -279,7 +250,6 @@ export default function Home() {
     setShowDislikeModal(true);
   };
 
-  // 確認送出 👎 意見
   const confirmDislikeFeedback = async () => {
     if (!isValidUUID(userId)) return;
     try {
@@ -303,7 +273,6 @@ export default function Home() {
     }
   };
 
-  // 9. 執行重置對話紀錄
   const confirmResetHistory = async () => {
     if (!isValidUUID(userId)) return;
     try {
@@ -318,7 +287,6 @@ export default function Home() {
     }
   };
 
-  // 10. 大腦偏好規則：刪除整筆規則
   const handleDeleteInstruction = async (id: string) => {
     if (!confirm('確認刪除這筆大腦規則嗎？') || !isValidUUID(userId)) return;
     try {
@@ -336,13 +304,11 @@ export default function Home() {
     }
   };
 
-  // 11. 大腦偏好規則：就地啟用編輯
   const handleEditClick = (id: string, text: string) => {
     setEditingInstructionId(id);
     setEditingText(text);
   };
 
-  // 12. 大腦偏好規則：儲存編輯修改
   const handleSaveInstruction = async (id: string) => {
     if (!editingText.trim() || !isValidUUID(userId)) return;
     try {
@@ -361,10 +327,6 @@ export default function Home() {
     }
   };
 
-
-  // ----------------------------------------------------
-  // 渲染層：安全載入畫面
-  // ----------------------------------------------------
   if (authLoading) {
     return (
       <div className="fixed inset-0 bg-slate-900 flex flex-col items-center justify-center text-white">
@@ -394,21 +356,8 @@ export default function Home() {
       `}</style>
       
       {!user ? (
-        /* ========================================================
-            🐱 登入畫面：採用原先乾淨、置中的簡單配置
-            ======================================================== */
-        <div className="flex-1 flex flex-col items-center justify-center p-6">
+        <div className="flex-1 flex items-center justify-center p-4">
           <div className="bg-slate-800 border border-slate-700 rounded-3xl p-8 w-full max-w-md text-center shadow-2xl">
-            
-            {/* 🌟 修正 1 & 2：如果是內建瀏覽器，顯示友善提示引導，排除無法保存登入的痛點 */}
-            {isInAppBrowser && (
-              <div className="bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm p-4 rounded-2xl mb-6 text-left leading-relaxed">
-                <span className="font-bold">⚠️ 偵測到內建瀏覽器：</span><br />
-                您目前正在 App (如 LINE / FB) 內開啟此頁面。這會導致<strong>每次關閉程式後都要重新登入</strong>。<br />
-                <span className="text-amber-400 font-semibold">💡 解決方法：</span>請點擊右上角或右下角的選單（<code>...</code>），選擇<strong>「在外部瀏覽器中開啟」</strong>（Chrome/Safari）。在系統瀏覽器登入後，即可永久保持登入，並能「新增至主畫面」徹底隱藏最上方的網頁控制列喔！
-              </div>
-            )}
-
             <div className="w-20 h-20 rounded-full bg-violet-600/20 flex items-center justify-center text-4xl border border-violet-500/30 mx-auto mb-6">
               🐱
             </div>
@@ -429,9 +378,6 @@ export default function Home() {
           </div>
         </div>
       ) : (
-        /* ========================================================
-            💬 主功能對話頁面 (使用者登入後渲染)
-            ======================================================== */
         <>
           {/* 1. 頂部導覽列 */}
           <header className="flex-shrink-0 bg-gradient-to-r from-violet-600 to-indigo-600 p-4 shadow-md flex items-center justify-between gap-2">
@@ -445,7 +391,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* 下拉式字體選擇選單 */}
             <div className="relative flex-shrink-0">
               <select
                 value={fontSize}
@@ -463,26 +408,15 @@ export default function Home() {
               </div>
             </div>
             
-            {/* 🌟 修正 3：更換為高相容、完美圓形、保證渲染出的「齒輪圖片」設定按鈕 */}
+            {/* 🌟 修正：右上角圓點按鈕，SVG 尺寸改為標準 w-6 h-6 (不再顯示為空心圓點，齒輪能正常顯示！) */}
             <button 
               onClick={() => setShowSettingsModal(true)}
-              className="text-white hover:text-white bg-white/10 hover:bg-white/20 p-2.5 rounded-full border border-white/20 active:scale-95 transition-all flex-shrink-0 flex items-center justify-center w-10 h-10"
+              className="text-white hover:text-white bg-white/10 p-2 rounded-xl border border-white/20 active:scale-95 transition-all flex-shrink-0 flex items-center justify-center"
               title="系統設定"
             >
-              <svg 
-                xmlns="http://www.w3.org/2000/svg" 
-                width="20" 
-                height="20" 
-                viewBox="0 0 24 24" 
-                fill="none" 
-                stroke="currentColor" 
-                strokeWidth="2.5" 
-                strokeLinecap="round" 
-                strokeLinejoin="round" 
-                className="w-5 h-5 text-white"
-              >
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.43l-1.003.828c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.43l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.991l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28z"/>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
               </svg>
             </button>
           </header>
@@ -561,13 +495,10 @@ export default function Home() {
         </>
       )}
 
-      {/* ========================================================
-          ⚙️ 齒輪：系統設定主控制台 (全能型 Modal 視窗)
-          ======================================================== */}
+      {/* 設定 Modal */}
       {showSettingsModal && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 z-40 animate-fade-in">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
-            {/* 標題列 */}
             <div className="flex-shrink-0 p-5 border-b border-slate-700 flex justify-between items-center bg-slate-800/50">
               <h3 className={`${currentStyle.modalTitle} text-violet-400 flex items-center gap-2`}>
                 ⚙️ 系統設定中心
@@ -582,9 +513,7 @@ export default function Home() {
               </button>
             </div>
 
-            {/* 可捲動主內容區 */}
             <div className="flex-1 overflow-y-auto p-6 space-y-8">
-              {/* 區塊一：Google 使用者帳號狀態 & 登出 */}
               <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-700/50 flex flex-col gap-3">
                 <div className="flex items-center gap-3">
                   {user?.user_metadata?.avatar_url ? (
@@ -607,7 +536,6 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* 區塊二：管理大腦指導規則 */}
               <div className="space-y-3">
                 <h4 className="text-base font-bold text-slate-300 flex items-center gap-1.5">
                   🧠 編輯大腦指導偏好 ({instructions.length})
@@ -666,18 +594,16 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* 區塊三：對話控制與重製記憶 */}
               <div className="pt-4 border-t border-slate-700/50">
                 <button
                   onClick={() => setShowResetModal(true)}
                   className="w-full bg-amber-600/10 hover:bg-amber-600/20 border border-amber-500/30 text-amber-300 font-semibold py-3 rounded-lg active:scale-98 transition-all text-sm"
                 >
-                  🗑️ 清空歷史對話（保留大腦規則）
+                  🗑️ 清空對話（保留大腦規則）
                 </button>
               </div>
             </div>
             
-            {/* 底部按鈕 */}
             <div className="flex-shrink-0 p-4 border-t border-slate-700 bg-slate-900/20 flex justify-end">
               <button 
                 onClick={() => setShowSettingsModal(false)}
@@ -690,12 +616,12 @@ export default function Home() {
         </div>
       )}
 
-      {/* 🚨 彈窗 A：清空對話確認 */}
+      {/* 彈窗 A：清空確認 */}
       {showResetModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
             <h3 className={`${currentStyle.modalTitle} text-white mb-3`}>系統提示</h3>
-            <p className={`${currentStyle.modalText} text-slate-300 mb-6`}>是否要清除該使用者的所有對話記憶？（注意：這會清空所有的歷史聊天，但不會影響您的大腦規則喔！）</p>
+            <p className={`${currentStyle.modalText} text-slate-300 mb-6`}>是否要清除該使用者的所有對話記憶？（不會影響大腦規則喔！）</p>
             <div className="flex space-x-3 justify-center">
               <button 
                 onClick={() => setShowResetModal(false)}
@@ -714,12 +640,12 @@ export default function Home() {
         </div>
       )}
 
-      {/* 🧠 彈窗 B：不滿意 (Dislike) 反饋彈窗 */}
+      {/* 彈窗 B：不滿意 (Dislike) 反饋彈窗 */}
       {showDislikeModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
             <h3 className={`${currentStyle.modalTitle} text-rose-400 mb-2`}>幫助助理改進</h3>
-            <p className="text-slate-400 text-sm mb-4">這段回覆哪裡不對呢？（例如：語氣太冷淡、忘記加口頭禪、請回答得更簡短...）</p>
+            <p className="text-slate-400 text-sm mb-4">這段回覆哪裡不對呢？（例如：語氣太冷淡、請回答得更簡短...）</p>
             
             <textarea
               value={dislikeCorrection}
