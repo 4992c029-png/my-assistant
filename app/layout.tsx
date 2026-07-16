@@ -20,7 +20,7 @@ export default function RootLayout({
         {/* PWA 關聯設定 */}
         <link rel="manifest" href="/manifest.json" />
         
-        {/* 🌟 修正點 1：即使在一般瀏覽器，也強制將上方網址列染色為 App 紫色，達成視覺一體化 */}
+        {/* 即使在一般瀏覽器，也強制將上方網址列染色為 App 紫色，達成視覺一體化 */}
         <meta name="theme-color" content="#7c3aed" />
         
         {/* iOS WebApp 滿版全螢幕支援 */}
