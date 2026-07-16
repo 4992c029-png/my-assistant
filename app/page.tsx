@@ -55,11 +55,25 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 初始化：使用者 ID 與本地字體偏好
+// 3. 初始化：使用者 ID 與本地字體偏好
   useEffect(() => {
     let id = localStorage.getItem('assistant_user_id');
-    if (!id) {
-      id = 'usr_' + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
+    
+    // 驗證是否符合標準 UUID v4 格式的正則表達式
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    
+    // 🌟 如果還沒有 ID，或者舊的 ID 是不合規的舊格式（例如帶有 "usr_"），就強制重新生成標準 UUID
+    if (!id || !uuidRegex.test(id)) {
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        id = crypto.randomUUID(); // 現代瀏覽器原生支援的高強度 UUID 產生器
+      } else {
+        // 萬一瀏覽器不支援的原生相容隨機轉譯法
+        id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+          const r = Math.random() * 16 | 0;
+          const v = c === 'x' ? r : (r & 0x3 | 0x8);
+          return v.toString(16);
+        });
+      }
       localStorage.setItem('assistant_user_id', id);
     }
     setUserId(id);
