@@ -1,70 +1,3 @@
-import { Metadata, Viewport } from 'next';
-
-export const metadata: Metadata = {
-  title: '專屬 AI 助理',
-  description: '客製化 AI 聊天機器人',
-  // 🔍 讓 Android / iOS 識別為可全螢幕執行的網頁 APP
-  manifest: '/manifest.json',
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: 'black-translucent', // 🌟 讓 iOS 頂部狀態列變為透明/沉浸式
-    title: 'AI 助理',
-  },
-};
-
-// 🌟 Next.js 推薦將 viewport 獨立設定，這是消除網址列與填滿螢幕的關鍵
-export const viewport: Viewport = {
-  width: 'device-width',
-  initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
-  viewportFit: 'cover', // 🌟 填滿包括手機瀏海、安全區域在內的所有區塊
-  themeColor: '#4f46e5', // 🌟 設定與 App 頂部 Gradient 相同的紫色，讓尚未隱藏的網址列條跟主色融合
-};
-
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  return (
-    <html lang="zh-TW">
-      <body>{children}</body>
-    </html>
-  );
-}
-📁 2. public/manifest.json 設定確認
-請確保你的 public/manifest.json 檔案中含有 "display": "standalone"。這會通知手機作業系統「請用無網址列的全螢幕 App 模式啟動」：
-
-JSON
-{
-  "name": "專屬 AI 助理",
-  "short_name": "AI 助理",
-  "description": "客製化 AI 聊天機器人",
-  "start_url": "/",
-  "display": "standalone",
-  "orientation": "portrait",
-  "background_color": "#0f172a",
-  "theme_color": "#4f46e5",
-  "icons": [
-    {
-      "src": "/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png"
-    },
-    {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png"
-    }
-  ]
-}
-(提示：若無 icon-192.png 等圖檔，也可以先移除 icons 欄位，但 standalone 是必須的)
-
-📁 3. page.tsx 完整程式碼更新
-這個版本包含了 1. 強制 Supabase 儲存登入、2. 修正齒輪圖示 w-6 h-6 顯示 的所有優化：
-
-TypeScript
 'use client';
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
@@ -73,7 +6,7 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-// 🌟 修正：顯式加入持久化儲存設定，確保登入狀態不遺失
+// 🌟 顯式加入持久化儲存設定，確保登入狀態不遺失
 const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,      // 啟用 Session 持久化 (存在 LocalStorage)
@@ -82,9 +15,9 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   }
 });
 
-// UUID 驗證防呆機制
+// 🌟 修正：放寬 UUID 驗證，容許所有版本的 UUID (包括本地測試帳號 0000...0000)，避免因格式過於嚴格導致強制登出
 const isValidUUID = (id: string) => {
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   return uuidRegex.test(id);
 };
 
@@ -144,10 +77,12 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 清除網址中的 OAuth 認證參數
+  // 🌟 修正：延遲 100 毫秒清除網址參數，確保 Supabase 已經將 Token 讀取完畢，避免 OAuth 登入失效
   const clearUrlParams = () => {
     if (typeof window !== 'undefined' && (window.location.search || window.location.hash)) {
-      window.history.replaceState(null, '', window.location.pathname);
+      setTimeout(() => {
+        window.history.replaceState(null, '', window.location.pathname);
+      }, 100);
     }
   };
 
@@ -475,7 +410,7 @@ export default function Home() {
               </div>
             </div>
             
-            {/* 🌟 修正：右上角圓點按鈕，SVG 尺寸改為標準 w-6 h-6 (不再顯示為空心圓點，齒輪能正常顯示！) */}
+            {/* 右上角設定齒輪 */}
             <button 
               onClick={() => setShowSettingsModal(true)}
               className="text-white hover:text-white bg-white/10 p-2 rounded-xl border border-white/20 active:scale-95 transition-all flex-shrink-0 flex items-center justify-center"
