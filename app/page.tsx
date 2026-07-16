@@ -2,12 +2,18 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-// 初始化客戶端 Supabase (注意：環境變數需加 NEXT_PUBLIC_ 前綴)
+// 初始化客戶端 Supabase (加入 explicit 參數確保登入狀態強制儲存於 LocalStorage)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true, // 強制啟用 Session 持久化儲存
+    autoRefreshToken: true,
+    detectSessionInUrl: true
+  }
+});
 
-// 🌟 新增：UUID 驗證防呆機制（確保使用者 ID 100% 符合 PostgreSQL 的 UUID 格式）
+// 🌟 UUID 驗證防呆機制（確保使用者 ID 100% 符合 PostgreSQL 的 UUID 格式）
 const isValidUUID = (id: string) => {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   return uuidRegex.test(id);
@@ -17,6 +23,9 @@ export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [userId, setUserId] = useState('');
+  
+  // 🌟 新增：偵測是否在不合適的社群內建瀏覽器（如 FB / IG）
+  const [isInAppBrowser, setIsInAppBrowser] = useState(false);
 
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
@@ -43,7 +52,7 @@ export default function Home() {
   const [editingInstructionId, setEditingInstructionId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
 
-  // 比例縮放樣式表 (與齒輪/大腦系統相容)
+  // 比例縮放樣式表
   const sizeStyles = {
     small: {
       bubble: 'text-base p-2.5 px-4 rounded-2xl',           // ~16px
@@ -76,15 +85,38 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 🌟 新增：清除網址中的 OAuth 認證參數（如 hash 或 search query）
+  // 🌟 清除網址中的 OAuth 認證參數（如 hash 或 search query）
   const clearUrlParams = () => {
     if (typeof window !== 'undefined' && (window.location.search || window.location.hash)) {
       window.history.replaceState(null, '', window.location.pathname);
     }
   };
 
-  // 1. 初始化監聽：Google 驗證狀態 + 🌟 格式防呆自我修復 + 清除網址參數
+  // 1. 初始化監聽：防外掛瀏覽器 + Google 驗證狀態 + 格式防呆自我修復 + 清除網址參數
   useEffect(() => {
+    // 🌟 核心防禦：偵測是否是在 LINE/FB/IG 內建瀏覽器中開啟
+    if (typeof window !== 'undefined') {
+      const ua = navigator.userAgent || '';
+      const isLine = /Line/i.test(ua);
+      const isFb = /FBAN|FBAV/i.test(ua);
+      const isInstagram = /Instagram/i.test(ua);
+      const isWeChat = /MicroMessenger/i.test(ua);
+      const isInApp = isLine || isFb || isInstagram || isWeChat;
+
+      if (isLine && !window.location.search.includes('openExternalBrowser')) {
+        // 🚀 LINE 專用魔法跳轉：強制用系統預設瀏覽器（Safari/Chrome）重新開啟
+        window.location.href = window.location.origin + window.location.pathname + '?openExternalBrowser=1';
+        return;
+      }
+
+      // 如果是 FB, IG 或微信，則顯示全螢幕導引提示遮罩
+      if (isInApp && !isLine) {
+        setIsInAppBrowser(true);
+        setAuthLoading(false);
+        return;
+      }
+    }
+
     // 檢查現有 Session
     supabase.auth.getSession().then(({ data: { session } }) => {
       const currentUser = session?.user ?? null;
@@ -93,9 +125,8 @@ export default function Home() {
           setUser(currentUser);
           setUserId(currentUser.id);
           fetchInstructions(currentUser.id);
-          clearUrlParams(); // 🌟 成功獲取 Session 後立即清除網址雜訊
+          clearUrlParams(); // 成功獲取 Session 後立即清除網址雜訊
         } else {
-          // 🚨 自我修復：如果發現登入的 ID 格式不是 UUID（殘留髒資料），強制登出並清除快取
           console.error("❌ 偵測到非標準 UUID 的使用者 ID，強制登出以重置快取:", currentUser.id);
           supabase.auth.signOut();
           setUser(null);
@@ -108,7 +139,7 @@ export default function Home() {
       setAuthLoading(false);
     });
 
-    // 監聽 Auth 狀態改變 (例如登入、登出、切換帳號)
+    // 監聽 Auth 狀態改變
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       const currentUser = session?.user ?? null;
       if (currentUser) {
@@ -116,9 +147,8 @@ export default function Home() {
           setUser(currentUser);
           setUserId(currentUser.id);
           fetchInstructions(currentUser.id);
-          clearUrlParams(); // 🌟 登入狀態變更確認後，再次確保網址乾淨
+          clearUrlParams(); // 登入狀態變更確認後，再次確保網址乾淨
         } else {
-          // 🚨 自我修復：Auth 狀態改變時同樣進行 UUID 格式防禦
           console.error("❌ 偵測到非標準 UUID 的使用者 ID，強制登出以重置快取:", currentUser.id);
           supabase.auth.signOut();
           setUser(null);
@@ -143,7 +173,7 @@ export default function Home() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // 2. 獲取大腦偏好規則 (防呆)
+  // 2. 獲取大腦偏好規則
   const fetchInstructions = async (uid: string) => {
     if (!uid || !isValidUUID(uid)) return;
     const { data, error } = await supabase
@@ -171,7 +201,7 @@ export default function Home() {
     }
   };
 
-  // 4. 處理登出 (切換帳號)
+  // 4. 處理登出
   const handleLogout = async () => {
     if (!confirm('確認登出並切換不同 Google 帳號嗎？')) return;
     try {
@@ -188,7 +218,7 @@ export default function Home() {
     localStorage.setItem('app_font_size', size);
   };
 
-  // 6. 載入對話歷史紀錄 (防呆：只有在確信是 UUID 時才向後端請求)
+  // 6. 載入對話歷史紀錄
   useEffect(() => {
     if (!userId || !isValidUUID(userId)) return;
     
@@ -207,7 +237,7 @@ export default function Home() {
       .catch(err => console.error("❌ 載入歷史訊息失敗:", err));
   }, [userId]);
 
-  // 7. 傳送訊息 (防呆：只有在確信是 UUID 時才允許發送)
+  // 7. 傳送訊息
   const handleSendMessage = async () => {
     if (!input.trim() || loading || !isValidUUID(userId)) return;
     setLoading(true);
@@ -234,7 +264,7 @@ export default function Home() {
     }
   };
 
-  // 8. 處理 👍 (滿意) 反饋 (防呆)
+  // 8. 處理 👍 (滿意) 反饋
   const handleLike = async (msgId: string, content: string) => {
     if (feedbackStatus[msgId] || !isValidUUID(userId)) return;
 
@@ -246,7 +276,7 @@ export default function Home() {
       });
       if (res.ok) {
         setFeedbackStatus(prev => ({ ...prev, [msgId]: 'like' }));
-        fetchInstructions(userId); // 即時更新設定面板內的大腦規則
+        fetchInstructions(userId);
       }
     } catch (err) {
       console.error("👍 反饋寫入失敗:", err);
@@ -262,7 +292,7 @@ export default function Home() {
     setShowDislikeModal(true);
   };
 
-  // 確認送出 👎 意見 (防呆)
+  // 確認送出 👎 意見
   const confirmDislikeFeedback = async () => {
     if (!isValidUUID(userId)) return;
     try {
@@ -279,14 +309,14 @@ export default function Home() {
       if (res.ok) {
         setFeedbackStatus(prev => ({ ...prev, [activeFeedbackMsgId]: 'dislike' }));
         setShowDislikeModal(false);
-        fetchInstructions(userId); // 即時更新設定面板內的大腦規則
+        fetchInstructions(userId);
       }
     } catch (err) {
       console.error("👎 反饋寫入失敗:", err);
     }
   };
 
-  // 9. 執行重置對話紀錄 (防呆)
+  // 9. 執行重置對話紀錄
   const confirmResetHistory = async () => {
     if (!isValidUUID(userId)) return;
     try {
@@ -294,14 +324,14 @@ export default function Home() {
       setMessages([]);
       setFeedbackStatus({});
       setShowResetModal(false);
-      setShowSettingsModal(false); // 順便關閉大腦選單
+      setShowSettingsModal(false);
       alert('已清除當前所有對話記憶！🗑️');
     } catch (err) {
       console.error(err);
     }
   };
 
-  // 10. 大腦偏好規則：刪除整筆規則 (防呆)
+  // 10. 大腦偏好規則：刪除整筆規則
   const handleDeleteInstruction = async (id: string) => {
     if (!confirm('確認刪除這筆大腦規則嗎？') || !isValidUUID(userId)) return;
     try {
@@ -309,7 +339,7 @@ export default function Home() {
         .from('user_instructions')
         .delete()
         .eq('id', id)
-        .eq('user_id', userId); // 額外鎖定 user_id 確保安全
+        .eq('user_id', userId);
 
       if (error) throw error;
       setInstructions(prev => prev.filter(item => item.id !== id));
@@ -325,7 +355,7 @@ export default function Home() {
     setEditingText(text);
   };
 
-  // 12. 大腦偏好規則：儲存編輯修改 (防呆)
+  // 12. 大腦偏好規則：儲存編輯修改
   const handleSaveInstruction = async (id: string) => {
     if (!editingText.trim() || !isValidUUID(userId)) return;
     try {
@@ -333,7 +363,7 @@ export default function Home() {
         .from('user_instructions')
         .update({ instruction: editingText })
         .eq('id', id)
-        .eq('user_id', userId); // 額外鎖定 user_id 確保安全
+        .eq('user_id', userId);
 
       if (error) throw error;
       setInstructions(prev => prev.map(item => item.id === id ? { ...item, instruction: editingText } : item));
@@ -357,7 +387,6 @@ export default function Home() {
     );
   }
 
-  // 🌟 將整個版面包含登入與主功能統合在相同的全螢幕 Container 與全域 style 下，確保排版永遠置中且正確套用重設樣式
   return (
     <div 
       className="fixed inset-0 w-full flex flex-col bg-slate-900 text-white overflow-hidden select-none"
@@ -377,9 +406,31 @@ export default function Home() {
         }
       `}</style>
       
+      {/* 🌟 彈窗 C：非 LINE 的社群瀏覽器警告遮罩 */}
+      {isInAppBrowser && (
+        <div className="fixed inset-0 bg-slate-950/95 z-50 flex flex-col items-center justify-center p-6 text-center">
+          <div className="w-20 h-20 rounded-full bg-amber-500/10 flex items-center justify-center text-4xl border border-amber-500/30 mb-6 animate-bounce">
+            ⚠️
+          </div>
+          <h3 className="text-2xl font-extrabold text-amber-400 mb-3">請使用系統瀏覽器開啟</h3>
+          <p className="text-slate-300 text-base max-w-sm mb-6 leading-relaxed">
+            偵測到您目前正使用<strong>社群軟體內建瀏覽器</strong>。<br />
+            這會導致：
+          </p>
+          <ul className="text-left text-slate-400 text-sm space-y-2 max-w-xs mx-auto mb-8 bg-slate-900 p-4 rounded-xl border border-slate-800">
+            <li className="flex items-start gap-2">❌ <strong>無法保持登入</strong>（每次關閉都需要重登）</li>
+            <li className="flex items-start gap-2">❌ <strong>上方網頁列無法隱藏</strong>（排版不全、干擾畫面）</li>
+          </ul>
+          <div className="bg-violet-600 text-white font-bold py-3.5 px-6 rounded-full text-base animate-pulse shadow-lg">
+            請點擊右上角「 ⁝ 」或「 ... 」<br />
+            並選擇「在瀏覽器中開啟」
+          </div>
+        </div>
+      )}
+
       {!user ? (
         /* ========================================================
-            🐱 登入畫面：採用原先乾淨、置中的簡單配置 (不跑版)
+            🐱 登入畫面：採用原先乾淨、置中的簡單配置
             ======================================================== */
         <div className="flex-1 flex items-center justify-center p-4">
           <div className="bg-slate-800 border border-slate-700 rounded-3xl p-8 w-full max-w-md text-center shadow-2xl">
@@ -437,7 +488,7 @@ export default function Home() {
               </div>
             </div>
             
-            {/* 🌟 頂部最右側：齒輪按鈕 (進入系統選單) */}
+            {/* 🌟 頂部最右側：齒輪按鈕 */}
             <button 
               onClick={() => setShowSettingsModal(true)}
               className="text-white hover:text-white bg-white/10 p-2.5 rounded-xl border border-white/20 active:scale-95 transition-all flex-shrink-0 flex items-center justify-center"
