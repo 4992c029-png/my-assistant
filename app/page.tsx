@@ -7,6 +7,12 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// 🌟 新增：UUID 驗證防呆機制（確保使用者 ID 100% 符合 PostgreSQL 的 UUID 格式）
+const isValidUUID = (id: string) => {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(id);
+};
+
 export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -59,8 +65,8 @@ export default function Home() {
     },
     large: {
       bubble: 'text-[26px] p-3 px-5 rounded-[1.8rem]',    // ~26px
-      input: 'text-[22px] py-1.5 px-4',                   
-      sendBtn: 'text-[22px] px-5 py-1.5',                 
+      input: 'text-[22px] py-1.5 px-4',                    
+      sendBtn: 'text-[22px] px-5 py-1.5',                  
       feedbackBtn: 'text-base mt-1.5 pl-2 space-x-4',
       modalTitle: 'text-2xl font-bold',
       modalText: 'text-lg',
@@ -70,24 +76,47 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 1. 初始化監聽：Google 驗證狀態
+  // 1. 初始化監聽：Google 驗證狀態 + 🌟 格式防呆自我修復
   useEffect(() => {
     // 檢查現有 Session
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        setUserId(session.user.id);
-        fetchInstructions(session.user.id);
+      const currentUser = session?.user ?? null;
+      if (currentUser) {
+        if (isValidUUID(currentUser.id)) {
+          setUser(currentUser);
+          setUserId(currentUser.id);
+          fetchInstructions(currentUser.id);
+        } else {
+          // 🚨 自我修復：如果發現登入的 ID 格式不是 UUID（殘留髒資料），強制登出並清除快取
+          console.error("❌ 偵測到非標準 UUID 的使用者 ID，強制登出以重置快取:", currentUser.id);
+          supabase.auth.signOut();
+          setUser(null);
+          setUserId('');
+        }
+      } else {
+        setUser(null);
+        setUserId('');
       }
       setAuthLoading(false);
     });
 
     // 監聽 Auth 狀態改變 (例如登入、登出、切換帳號)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        setUserId(session.user.id);
-        fetchInstructions(session.user.id);
+      const currentUser = session?.user ?? null;
+      if (currentUser) {
+        if (isValidUUID(currentUser.id)) {
+          setUser(currentUser);
+          setUserId(currentUser.id);
+          fetchInstructions(currentUser.id);
+        } else {
+          // 🚨 自我修復：Auth 狀態改變時同樣進行 UUID 格式防禦
+          console.error("❌ 偵測到非標準 UUID 的使用者 ID，強制登出以重置快取:", currentUser.id);
+          supabase.auth.signOut();
+          setUser(null);
+          setUserId('');
+          setInstructions([]);
+          setMessages([]);
+        }
       } else {
         setUserId('');
         setInstructions([]);
@@ -105,9 +134,9 @@ export default function Home() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // 2. 獲取大腦偏好規則
+  // 2. 獲取大腦偏好規則 (防呆)
   const fetchInstructions = async (uid: string) => {
-    if (!uid) return;
+    if (!uid || !isValidUUID(uid)) return;
     const { data, error } = await supabase
       .from('user_instructions')
       .select('*')
@@ -150,9 +179,9 @@ export default function Home() {
     localStorage.setItem('app_font_size', size);
   };
 
-  // 6. 載入對話歷史紀錄
+  // 6. 載入對話歷史紀錄 (防呆：只有在確信是 UUID 時才向後端請求)
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || !isValidUUID(userId)) return;
     
     fetch(`/api/history?userId=${userId}`)
       .then(res => res.json())
@@ -169,9 +198,9 @@ export default function Home() {
       .catch(err => console.error("❌ 載入歷史訊息失敗:", err));
   }, [userId]);
 
-  // 7. 傳送訊息
+  // 7. 傳送訊息 (防呆：只有在確信是 UUID 時才允許發送)
   const handleSendMessage = async () => {
-    if (!input.trim() || loading) return;
+    if (!input.trim() || loading || !isValidUUID(userId)) return;
     setLoading(true);
     
     const userMsg = { id: `msg_user_${Date.now()}`, role: 'user', content: input };
@@ -196,9 +225,9 @@ export default function Home() {
     }
   };
 
-  // 8. 處理 👍 (滿意) 反饋
+  // 8. 處理 👍 (滿意) 反饋 (防呆)
   const handleLike = async (msgId: string, content: string) => {
-    if (feedbackStatus[msgId]) return;
+    if (feedbackStatus[msgId] || !isValidUUID(userId)) return;
 
     try {
       const res = await fetch('/api/feedback', {
@@ -224,8 +253,9 @@ export default function Home() {
     setShowDislikeModal(true);
   };
 
-  // 確認送出 👎 意見
+  // 確認送出 👎 意見 (防呆)
   const confirmDislikeFeedback = async () => {
+    if (!isValidUUID(userId)) return;
     try {
       const res = await fetch('/api/feedback', {
         method: 'POST',
@@ -247,8 +277,9 @@ export default function Home() {
     }
   };
 
-  // 9. 執行重置對話紀錄
+  // 9. 執行重置對話紀錄 (防呆)
   const confirmResetHistory = async () => {
+    if (!isValidUUID(userId)) return;
     try {
       await fetch(`/api/history?userId=${userId}`, { method: 'DELETE' });
       setMessages([]);
@@ -261,14 +292,15 @@ export default function Home() {
     }
   };
 
-  // 10. 大腦偏好規則：刪除整筆規則
+  // 10. 大腦偏好規則：刪除整筆規則 (防呆)
   const handleDeleteInstruction = async (id: string) => {
-    if (!confirm('確認刪除這筆大腦規則嗎？')) return;
+    if (!confirm('確認刪除這筆大腦規則嗎？') || !isValidUUID(userId)) return;
     try {
       const { error } = await supabase
         .from('user_instructions')
         .delete()
-        .eq('id', id);
+        .eq('id', id)
+        .eq('user_id', userId); // 額外鎖定 user_id 確保安全
 
       if (error) throw error;
       setInstructions(prev => prev.filter(item => item.id !== id));
@@ -284,14 +316,15 @@ export default function Home() {
     setEditingText(text);
   };
 
-  // 12. 大腦偏好規則：儲存編輯修改
+  // 12. 大腦偏好規則：儲存編輯修改 (防呆)
   const handleSaveInstruction = async (id: string) => {
-    if (!editingText.trim()) return;
+    if (!editingText.trim() || !isValidUUID(userId)) return;
     try {
       const { error } = await supabase
         .from('user_instructions')
         .update({ instruction: editingText })
-        .eq('id', id);
+        .eq('id', id)
+        .eq('user_id', userId); // 額外鎖定 user_id 確保安全
 
       if (error) throw error;
       setInstructions(prev => prev.map(item => item.id === id ? { ...item, instruction: editingText } : item));
@@ -503,7 +536,7 @@ export default function Home() {
               {/* 區塊一：Google 使用者帳號狀態 & 登出 */}
               <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-700/50 flex flex-col gap-3">
                 <div className="flex items-center gap-3">
-                  {user.user_metadata?.avatar_url ? (
+                  {user?.user_metadata?.avatar_url ? (
                     <img src={user.user_metadata.avatar_url} alt="avatar" className="w-12 h-12 rounded-full border border-violet-500/50" />
                   ) : (
                     <div className="w-12 h-12 rounded-full bg-violet-600/30 flex items-center justify-center text-xl font-bold border border-violet-500/30">
@@ -511,8 +544,8 @@ export default function Home() {
                     </div>
                   )}
                   <div className="min-w-0 flex-1">
-                    <p className="text-slate-200 font-bold truncate leading-snug">{user.user_metadata?.full_name || 'Google 使用者'}</p>
-                    <p className="text-slate-400 text-xs truncate leading-normal">{user.email}</p>
+                    <p className="text-slate-200 font-bold truncate leading-snug">{user?.user_metadata?.full_name || 'Google 使用者'}</p>
+                    <p className="text-slate-400 text-xs truncate leading-normal">{user?.email}</p>
                   </div>
                 </div>
                 <button
