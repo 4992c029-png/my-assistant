@@ -19,7 +19,7 @@ export default function RootLayout({
   return (
     // 1. 強制宣告繁體中文語系 (zh-TW)
     // 2. 加上 notranslate 屬性，通知所有瀏覽器「此網頁絕對不要翻譯」
-    <html lang="zh-TW" className="notranslate" google="notranslate">
+    <html lang="zh-TW" className="notranslate">
       <head>
         {/* 徹底阻擋 Google 翻譯的 Meta 標籤 */}
         <meta name="google" content="notranslate" />
