@@ -80,7 +80,7 @@ ${userPreferences}
 
     // 🌟 7. 呼叫 Gemini 取得回答
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash', 
+      model: 'gemini-2.5-flash-lite', 
       contents: contents, 
       config: { systemInstruction: systemPrompt },
     });
