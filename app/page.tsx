@@ -1,21 +1,25 @@
+// app/page.tsx
 'use client';
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-// 初始化客戶端 Supabase 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-// 🌟 顯式加入持久化儲存設定，確保登入狀態不遺失
-const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,      // 啟用 Session 持久化 (存在 LocalStorage)
-    autoRefreshToken: true,    // 自動刷新 Token
-    detectSessionInUrl: true   // 自動偵測 OAuth 重新導向的 Session
-  }
-});
+// 🌟 修正點 2：建立安全、僅在客戶端初始化的 Supabase 單例，確保完美對接 window.localStorage，解決登入遺失問題
+const supabase = typeof window !== 'undefined' 
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: true,               // 啟用長效登入持久化
+        storageKey: 'sb-assistant-session', // 自訂儲存 Key 避免衝突
+        storage: window.localStorage,       // 強制儲存於 LocalStorage
+        autoRefreshToken: true,             // 自動刷新 Token
+        detectSessionInUrl: true            // 自動偵測 OAuth 回調
+      }
+    })
+  : null;
 
-// 🌟 修正：放寬 UUID 驗證，容許所有版本的 UUID (包括本地測試帳號 0000...0000)，避免因格式過於嚴格導致強制登出
+// 放寬 UUID 驗證，容許所有版本的 UUID (包括本地測試帳號 0000...0000)
 const isValidUUID = (id: string) => {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   return uuidRegex.test(id);
@@ -77,39 +81,49 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 🌟 修正：延遲 100 毫秒清除網址參數，確保 Supabase 已經將 Token 讀取完畢，避免 OAuth 登入失效
+  // 延遲清除網址參數，確保 Session 已寫入
   const clearUrlParams = () => {
     if (typeof window !== 'undefined' && (window.location.search || window.location.hash)) {
       setTimeout(() => {
         window.history.replaceState(null, '', window.location.pathname);
-      }, 100);
+      }, 150);
     }
   };
 
-  // 1. 初始化監聽
+  // 1. 初始化監聽與 Session 獲取
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      const currentUser = session?.user ?? null;
-      if (currentUser) {
-        if (isValidUUID(currentUser.id)) {
-          setUser(currentUser);
-          setUserId(currentUser.id);
-          fetchInstructions(currentUser.id);
-          clearUrlParams(); 
-        } else {
-          console.error("❌ 偵測到非標準 UUID 的使用者 ID，強制登出以重置快取:", currentUser.id);
-          supabase.auth.signOut();
-          setUser(null);
-          setUserId('');
-        }
-      } else {
-        setUser(null);
-        setUserId('');
-      }
+    if (!supabase) {
       setAuthLoading(false);
-    });
+      return;
+    }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    // 獲取初始 Session，確保重新開啟程式時可直接自動登入
+    const initSession = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const currentUser = session?.user ?? null;
+        if (currentUser) {
+          if (isValidUUID(currentUser.id)) {
+            setUser(currentUser);
+            setUserId(currentUser.id);
+            fetchInstructions(currentUser.id);
+            clearUrlParams(); 
+          } else {
+            console.error("❌ 非標準 UUID，登出安全重置:", currentUser.id);
+            await supabase.auth.signOut();
+          }
+        }
+      } catch (err) {
+        console.error("❌ 獲取登入 Session 失敗:", err);
+      } finally {
+        setAuthLoading(false);
+      }
+    };
+
+    initSession();
+
+    // 監聽登入與登出事件
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       const currentUser = session?.user ?? null;
       if (currentUser) {
         if (isValidUUID(currentUser.id)) {
@@ -118,14 +132,14 @@ export default function Home() {
           fetchInstructions(currentUser.id);
           clearUrlParams(); 
         } else {
-          console.error("❌ 偵測到非標準 UUID 的使用者 ID，強制登出以重置快取:", currentUser.id);
-          supabase.auth.signOut();
+          await supabase.auth.signOut();
           setUser(null);
           setUserId('');
           setInstructions([]);
           setMessages([]);
         }
       } else {
+        setUser(null);
         setUserId('');
         setInstructions([]);
         setMessages([]);
@@ -142,7 +156,7 @@ export default function Home() {
   }, []);
 
   const fetchInstructions = async (uid: string) => {
-    if (!uid || !isValidUUID(uid)) return;
+    if (!uid || !isValidUUID(uid) || !supabase) return;
     const { data, error } = await supabase
       .from('user_instructions')
       .select('*')
@@ -155,6 +169,7 @@ export default function Home() {
   };
 
   const handleGoogleLogin = async () => {
+    if (!supabase) return;
     try {
       await supabase.auth.signInWithOAuth({
         provider: 'google',
@@ -168,6 +183,7 @@ export default function Home() {
   };
 
   const handleLogout = async () => {
+    if (!supabase) return;
     if (!confirm('確認登出並切換不同 Google 帳號嗎？')) return;
     try {
       await supabase.auth.signOut();
@@ -290,6 +306,7 @@ export default function Home() {
   };
 
   const handleDeleteInstruction = async (id: string) => {
+    if (!supabase) return;
     if (!confirm('確認刪除這筆大腦規則嗎？') || !isValidUUID(userId)) return;
     try {
       const { error } = await supabase
@@ -312,6 +329,7 @@ export default function Home() {
   };
 
   const handleSaveInstruction = async (id: string) => {
+    if (!supabase) return;
     if (!editingText.trim() || !isValidUUID(userId)) return;
     try {
       const { error } = await supabase
@@ -339,8 +357,9 @@ export default function Home() {
   }
 
   return (
+    // 🌟 修正點 4：加上 'notranslate' class 避免任何翻譯外掛干擾
     <div 
-      className="fixed inset-0 w-full flex flex-col bg-slate-900 text-white overflow-hidden select-none"
+      className="fixed inset-0 w-full flex flex-col bg-slate-900 text-white overflow-hidden select-none notranslate"
       style={{ height: '100dvh', maxHeight: '100dvh' }}
     >
       <style>{`
@@ -410,15 +429,22 @@ export default function Home() {
               </div>
             </div>
             
-            {/* 右上角設定齒輪 */}
+            {/* 🌟 修正點 3：右上角系統設定，修改顯示為高解析度、乾淨的「齒輪圖片」 */}
             <button 
               onClick={() => setShowSettingsModal(true)}
-              className="text-white hover:text-white bg-white/10 p-2 rounded-xl border border-white/20 active:scale-95 transition-all flex-shrink-0 flex items-center justify-center"
+              className="text-white hover:text-violet-200 hover:bg-white/20 bg-white/10 p-2.5 rounded-xl border border-white/25 active:scale-95 transition-all flex-shrink-0 flex items-center justify-center"
               title="系統設定"
             >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.43l-1.003.828c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.43l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.991l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28z"/>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+              <svg 
+                className="w-5.5 h-5.5 animate-hover-spin" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2.2" 
+                viewBox="0 0 24 24" 
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             </button>
           </header>
