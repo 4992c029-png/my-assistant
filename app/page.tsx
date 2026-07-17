@@ -6,39 +6,47 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-// 備份機制 Key 
-const BACKUP_KEY = 'sb-backup-token-v3';
-const COOKIE_BACKUP_KEY = 'sb_backup_session_v3';
-
-// 輔助函式：Cookie 操作（解決 LocalStorage 掉登入的問題）
-const setCookie = (name: string, value: string, days: number) => {
-  if (typeof document === 'undefined') return;
-  const expires = new Date(Date.now() + days * 864e5).toUTCString();
-  document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax; Secure`;
+// 🌟 1. 建立 100% 穩定的 Cookie 儲存引擎（徹底解決重開 APP 掉登入的問題）
+const cookieStorage = {
+  getItem: (key: string): string | null => {
+    if (typeof document === 'undefined') return null;
+    const name = key + "=";
+    const decodedCookie = decodeURIComponent(document.cookie);
+    const ca = decodedCookie.split(';');
+    for (let i = 0; i < ca.length; i++) {
+      let c = ca[i];
+      while (c.charAt(0) === ' ') {
+        c = c.substring(1);
+      }
+      if (c.indexOf(name) === 0) {
+        return c.substring(name.length, c.length);
+      }
+    }
+    return null;
+  },
+  setItem: (key: string, value: string): void => {
+    if (typeof document === 'undefined') return;
+    // 設定 365 天長效過期時間，確保不被系統清理
+    const date = new Date();
+    date.setTime(date.getTime() + (365 * 24 * 60 * 60 * 1000));
+    const expires = "; expires=" + date.toUTCString();
+    document.cookie = key + "=" + encodeURIComponent(value) + expires + "; path=/; SameSite=Lax; Secure";
+  },
+  removeItem: (key: string): void => {
+    if (typeof document === 'undefined') return;
+    document.cookie = key + "=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; SameSite=Lax; Secure";
+  }
 };
 
-const getCookie = (name: string) => {
-  if (typeof document === 'undefined') return '';
-  return document.cookie.split('; ').reduce((r, v) => {
-    const parts = v.split('=');
-    return parts[0] === name ? decodeURIComponent(parts[1]) : r;
-  }, '');
-};
-
-const deleteCookie = (name: string) => {
-  if (typeof document === 'undefined') return;
-  document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; SameSite=Lax; Secure`;
-};
-
-// 僅在客戶端初始化 Supabase
+// 🌟 2. 初始化 Supabase 並綁定 Cookie 儲存引擎
 const supabase = typeof window !== 'undefined' 
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
         persistSession: true,
-        storageKey: 'sb-assistant-session',
-        storage: window.localStorage,
+        storageKey: 'sb-pwa-cookie-session',
+        storage: cookieStorage, // 👈 強制改用 Cookie 儲存
         autoRefreshToken: true,
-        detectSessionInUrl: true
+        detectSessionInUrl: true // 👈 關鍵：讓根目錄自動解析 Google 帶回來的 Hash
       }
     })
   : null;
@@ -104,58 +112,7 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 🌟 PWA 登入守護者：監聽跨視窗 Token 傳遞（解決網址列外顯的終極武器）
-  useEffect(() => {
-    const handleStorageChange = async (e: StorageEvent) => {
-      if (e.key === 'pwa-oauth-session' && e.newValue) {
-        try {
-          const sessionData = JSON.parse(e.newValue);
-          if (sessionData.access_token && sessionData.refresh_token && supabase) {
-            // 寫入 Supabase 核心 Session
-            const { data, error } = await supabase.auth.setSession({
-              access_token: sessionData.access_token,
-              refresh_token: sessionData.refresh_token
-            });
-            
-            if (!error && data.session) {
-              setUser(data.session.user);
-              setUserId(data.session.user.id);
-              fetchInstructions(data.session.user.id);
-              
-              // 雙軌制備份：同時備份至 LocalStorage 與 Cookie
-              const backupStr = JSON.stringify({
-                access_token: sessionData.access_token,
-                refresh_token: sessionData.refresh_token
-              });
-              localStorage.setItem(BACKUP_KEY, backupStr);
-              setCookie(COOKIE_BACKUP_KEY, backupStr, 365); // 存一年
-            }
-          }
-        } catch (err) {
-          console.error("跨視窗登入解析失敗:", err);
-        } finally {
-          localStorage.removeItem('pwa-oauth-session');
-        }
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    
-    // 定時輪詢以應對部分不觸發 storage 事件的手機瀏覽器
-    const interval = setInterval(() => {
-      const raw = localStorage.getItem('pwa-oauth-session');
-      if (raw) {
-        handleStorageChange({ key: 'pwa-oauth-session', newValue: raw } as StorageEvent);
-      }
-    }, 500);
-
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      clearInterval(interval);
-    };
-  }, []);
-
-  // 🌟 核心修正：雙軌制初始化驗證（解決關閉重開掉登入的問題）
+  // 🌟 3. 初始化登入驗證
   useEffect(() => {
     if (!supabase) {
       setAuthLoading(false);
@@ -164,45 +121,11 @@ export default function Home() {
 
     const initAuthentication = async () => {
       try {
-        // 1. 優先從 LocalStorage 讀取，若無則從 Cookie 讀取備份
-        let savedSessionStr = localStorage.getItem(BACKUP_KEY);
-        if (!savedSessionStr) {
-          savedSessionStr = getCookie(COOKIE_BACKUP_KEY);
-          if (savedSessionStr) {
-            localStorage.setItem(BACKUP_KEY, savedSessionStr); // 寫回 localStorage 補位
-          }
-        }
-
-        // 2. 恢復 Session
-        if (savedSessionStr) {
-          const parsed = JSON.parse(savedSessionStr);
-          if (parsed?.access_token && parsed?.refresh_token) {
-            const { data, error } = await supabase.auth.setSession({
-              access_token: parsed.access_token,
-              refresh_token: parsed.refresh_token
-            });
-            
-            if (!error && data.session && isValidUUID(data.session.user.id)) {
-              setUser(data.session.user);
-              setUserId(data.session.user.id);
-              fetchInstructions(data.session.user.id);
-            }
-          }
-        } else {
-          // 3. 都沒有則嘗試直接獲取 Session
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session && session.user && isValidUUID(session.user.id)) {
-            setUser(session.user);
-            setUserId(session.user.id);
-            fetchInstructions(session.user.id);
-            
-            const backupStr = JSON.stringify({
-              access_token: session.access_token,
-              refresh_token: session.refresh_token
-            });
-            localStorage.setItem(BACKUP_KEY, backupStr);
-            setCookie(COOKIE_BACKUP_KEY, backupStr, 365);
-          }
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session && session.user && isValidUUID(session.user.id)) {
+          setUser(session.user);
+          setUserId(session.user.id);
+          fetchInstructions(session.user.id);
         }
       } catch (err) {
         console.error("驗證恢復失敗:", err);
@@ -210,11 +133,13 @@ export default function Home() {
         setAuthLoading(false);
       }
 
-      // 監聽後續明確的登出
+      // 監聽登入與登出狀態變化
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
-        if (event === 'SIGNED_OUT') {
-          localStorage.removeItem(BACKUP_KEY);
-          deleteCookie(COOKIE_BACKUP_KEY);
+        if (event === 'SIGNED_IN' && currentSession?.user) {
+          setUser(currentSession.user);
+          setUserId(currentSession.user.id);
+          fetchInstructions(currentSession.user.id);
+        } else if (event === 'SIGNED_OUT') {
           setUser(null);
           setUserId('');
           setInstructions([]);
@@ -257,36 +182,17 @@ export default function Home() {
     }
   };
 
-  // 🌟 核心優化：非跳轉式彈出 Google 登入（確保主 PWA 視窗網址列永不顯露）
+  // 🌟 4. 標準原頁面跳轉登入（100% 解決 PWA 內彈出新網頁且不關閉的問題）
   const handleGoogleLogin = async () => {
     if (!supabase) return;
     try {
-      const { data, error } = await supabase.auth.signInWithOAuth({
+      await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin + '/auth-callback',
-          skipBrowserRedirect: true // 👈 叫 Supabase 不要跳轉主頁面，只提供 URL
+          // 原路導回根目錄 "/"，Supabase 會自動解析 URL 中的 Hash 並寫入 Cookie
+          redirectTo: window.location.origin, 
         }
       });
-
-      if (error) throw error;
-      if (data?.url) {
-        // 在新視窗中打開登入，不破壞主 Standalone PWA 視窗的畫面
-        const width = 500;
-        const height = 650;
-        const left = (window.screen.width - width) / 2;
-        const top = (window.screen.height - height) / 2;
-        
-        const popup = window.open(
-          data.url,
-          'pwa-google-login',
-          `width=${width},height=${height},top=${top},left=${left},scrollbars=yes,status=yes`
-        );
-
-        if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-          alert('請允許此網頁的「彈出式視窗」以完成 Google 登入！');
-        }
-      }
     } catch (err) {
       console.error("Google 登入失敗:", err);
     }
@@ -296,8 +202,6 @@ export default function Home() {
     if (!supabase) return;
     if (!confirm('確認要登出帳號嗎？')) return;
     try {
-      localStorage.removeItem(BACKUP_KEY);
-      deleteCookie(COOKIE_BACKUP_KEY);
       await supabase.auth.signOut();
       setShowSettingsModal(false);
     } catch (err) {
@@ -539,41 +443,35 @@ export default function Home() {
               </div>
             </div>
             
-            {/* 🌟 核心修正 3：對按鈕及 SVG 採用全 Inline 樣式與 flexShrink 鎖死，徹底防禦圓點問題 */}
+            {/* 🌟 5. 系統設定按鈕：改寫為標準 Lucide 齒輪 SVG，保證 100% 渲染成功 */}
             <button 
               onClick={() => setShowSettingsModal(true)}
-              className="bg-white/10 text-white rounded-xl active:scale-95 transition-all hover:bg-white/20"
+              className="bg-white/10 text-white rounded-xl active:scale-95 transition-all hover:bg-white/20 flex items-center justify-center"
               style={{ 
                 width: '44px', 
                 height: '44px', 
                 minWidth: '44px', 
                 minHeight: '44px', 
-                flexShrink: 0, // 👈 關鍵：防止任何 flex 容器壓扁按鈕
+                flexShrink: 0,
                 padding: '0px', 
                 border: '1px solid rgba(255,255,255,0.2)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
               }}
               title="系統設定"
             >
               <svg 
-                xmlns="http://www.w3.org/2000/svg"
+                xmlns="http://www.w3.org/2000/svg" 
                 viewBox="0 0 24 24" 
                 fill="none" 
-                stroke="#ffffff" // 👈 鎖死為白線
-                strokeWidth="2.5" 
+                stroke="currentColor" 
+                strokeWidth="2" 
                 strokeLinecap="round" 
                 strokeLinejoin="round" 
-                style={{ 
-                  width: '24px', 
-                  height: '24px', 
-                  display: 'block',
-                  flexShrink: 0 // 👈 防止 SVG 在 Safari 裡收縮
-                }}
+                className="w-6 h-6 text-white"
+                style={{ width: '24px', height: '24px', display: 'block', flexShrink: 0 }}
               >
+                {/* 標準 Lucide 齒輪 SVG 路徑 */}
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
                 <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
             </button>
           </header>
@@ -742,8 +640,7 @@ export default function Home() {
                               >
                                 🗑️ 刪除
                               </button>
-                            </div>
-                          </>
+                            </>
                         )}
                       </div>
                     ))
