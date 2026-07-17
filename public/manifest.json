@@ -1,4 +1,3 @@
-{
   "name": "專屬 AI 助理",
   "short_name": "AI 助理",
   "description": "客製化 AI 聊天機器人",
@@ -21,4 +20,4 @@
       "sizes": "512x512",
       "type": "image/png"
     }
-    }
+    
