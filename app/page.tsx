@@ -95,6 +95,7 @@ export default function Home() {
     if (!supabase) {
       setAuthLoading(false);
       return;
+      }
  // 註冊 PWA 服務
    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
      navigator.serviceWorker.register('/sw.js')
