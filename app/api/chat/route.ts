@@ -72,6 +72,8 @@ export async function POST(req: Request) {
 【使用者的最高指導大腦規則】
 ${userPreferences}
 
+所有回覆都須經過深度思考。
+
 【Execution Rules 防止幻覺硬性規定】
 1.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！
 ---
