@@ -6,7 +6,7 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-// 🌟 雙重強固儲存引擎（同時寫入 Cookie 與 LocalStorage，防禦 iOS 的快取清理）
+// 🌟 雙重強固儲存引擎：確保 Token 在 PWA 沙盒重啟時不會被 iOS 隨機清除
 const dualStorage = {
   getItem: (key: string): string | null => {
     if (typeof window === 'undefined') return null;
@@ -30,7 +30,7 @@ const dualStorage = {
   setItem: (key: string, value: string): void => {
     if (typeof window === 'undefined') return;
     const date = new Date();
-    date.setTime(date.getTime() + (365 * 24 * 60 * 60 * 1000)); // 365天長效
+    date.setTime(date.getTime() + (365 * 24 * 60 * 60 * 1000)); // 365天超長效
     const expires = "; expires=" + date.toUTCString();
     document.cookie = key + "=" + encodeURIComponent(value) + expires + "; path=/; SameSite=Lax; Secure";
     localStorage.setItem(key, value);
@@ -63,14 +63,6 @@ export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [userId, setUserId] = useState('');
-
-  // 登入介面狀態
-  const [authTab, setAuthTab] = useState<'email' | 'google'>('email');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isRegistering, setIsRegistering] = useState(false);
-  const [authError, setAuthError] = useState('');
-  const [authButtonLoading, setAuthButtonLoading] = useState(false);
 
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
@@ -123,58 +115,134 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 初始化登入狀態
+  // 🌟 動態注入 iOS PWA 全螢幕（隱藏網址列）所需的所有關鍵 Meta 標籤
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const metaTags = [
+      { name: 'apple-mobile-web-app-capable', content: 'yes' },
+      { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
+      { name: 'apple-mobile-web-app-title', content: '專屬 AI 助理' },
+      { name: 'mobile-web-app-capable', content: 'yes' }
+    ];
+
+    metaTags.forEach(tag => {
+      let el = document.querySelector(`meta[name="${tag.name}"]`);
+      if (!el) {
+        el = document.createElement('meta');
+        el.setAttribute('name', tag.name);
+        document.head.appendChild(el);
+      }
+      el.setAttribute('content', tag.content);
+    });
+  }, []);
+
+  // 🌟 初始化登入狀態與「無跳轉 Google GIS SDK」
   useEffect(() => {
     if (!supabase) {
       setAuthLoading(false);
       return;
     }
 
-    const initAuthentication = async () => {
+    // 恢復已有 Session
+    const restoreSession = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        if (session && session.user && isValidUUID(session.user.id)) {
+        if (session?.user && isValidUUID(session.user.id)) {
           setUser(session.user);
           setUserId(session.user.id);
           fetchInstructions(session.user.id);
         }
       } catch (err) {
-        console.error("驗證恢復失敗:", err);
+        console.error("Session 恢復失敗:", err);
       } finally {
         setAuthLoading(false);
       }
-
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
-        if (event === 'SIGNED_IN' && currentSession?.user) {
-          setUser(currentSession.user);
-          setUserId(currentSession.user.id);
-          fetchInstructions(currentSession.user.id);
-        } else if (event === 'SIGNED_OUT') {
-          setUser(null);
-          setUserId('');
-          setInstructions([]);
-          setMessages([]);
-        }
-      });
-
-      return subscription;
     };
 
-    const subPromise = initAuthentication();
+    restoreSession();
 
-    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch((err) => console.error(err));
-    }
+    // 監聽 Auth 變化
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
+      if (event === 'SIGNED_IN' && currentSession?.user) {
+        setUser(currentSession.user);
+        setUserId(currentSession.user.id);
+        fetchInstructions(currentSession.user.id);
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setUserId('');
+        setInstructions([]);
+        setMessages([]);
+      }
+    });
 
+    // 載入字型設定
     const savedSize = localStorage.getItem('app_font_size') as 'small' | 'medium' | 'large';
     if (savedSize) {
       setFontSize(savedSize);
     }
 
     return () => {
-      subPromise.then(sub => sub?.unsubscribe());
+      subscription?.unsubscribe();
     };
   }, []);
+
+  // 🌟 載入並渲染「一鍵無跳轉 Google 登入按鈕」
+  useEffect(() => {
+    if (typeof window === 'undefined' || !supabase || user) return;
+
+    const initGoogleGSI = () => {
+      if (!window.google) return;
+      try {
+        window.google.accounts.id.initialize({
+          client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '732049870020-fksd6756vffggdfg.apps.googleusercontent.com', // 請確保替換成您自己的 Web Client ID
+          callback: async (response: any) => {
+            setAuthLoading(true);
+            const { data, error } = await supabase.auth.signInWithIdToken({
+              provider: 'google',
+              token: response.credential, // 獲取 JWT Token，直接在 PWA 內部登入，拒絕任何跳轉！
+            });
+            if (!error && data?.user) {
+              setUser(data.user);
+              setUserId(data.user.id);
+              fetchInstructions(data.user.id);
+            } else if (error) {
+              alert(`Google 認證失敗: ${error.message}`);
+            }
+            setAuthLoading(false);
+          },
+          ux_mode: 'popup', // 👈 關鍵：強制使用彈窗模式，絕不離開當前 PWA 頁面！
+        });
+
+        // 渲染官方美化按鈕
+        const btnContainer = document.getElementById('google-signin-btn');
+        if (btnContainer) {
+          window.google.accounts.id.renderButton(
+            btnContainer,
+            { theme: 'filled_blue', size: 'large', shape: 'pill', width: 280 }
+          );
+        }
+      } catch (err) {
+        console.error("GSI 初始化失敗:", err);
+      }
+    };
+
+    if (window.google) {
+      initGoogleGSI();
+    } else {
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      script.onload = initGoogleGSI;
+      document.body.appendChild(script);
+      return () => {
+        if (document.body.contains(script)) {
+          document.body.removeChild(script);
+        }
+      };
+    }
+  }, [user, authLoading]);
 
   const fetchInstructions = async (uid: string) => {
     if (!uid || !isValidUUID(uid) || !supabase) return;
@@ -186,46 +254,6 @@ export default function Home() {
 
     if (!error && data) {
       setInstructions(data);
-    }
-  };
-
-  // 🌟 Email 登入/註冊處理（100% 不跳轉，完美保持在 PWA APP 中）
-  const handleEmailAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!supabase) return;
-    setAuthError('');
-    setAuthButtonLoading(true);
-
-    try {
-      if (isRegistering) {
-        const { data, error } = await supabase.auth.signUp({ email, password });
-        if (error) throw error;
-        if (data.user && !data.session) {
-          alert('註冊成功！請檢查您的郵箱以驗證帳號。');
-        }
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-      }
-    } catch (err: any) {
-      setAuthError(err.message || '認證失敗，請檢查輸入');
-    } finally {
-      setAuthButtonLoading(false);
-    }
-  };
-
-  // 傳統 Google 轉跳登入
-  const handleGoogleLogin = async () => {
-    if (!supabase) return;
-    try {
-      await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: window.location.origin, 
-        }
-      });
-    } catch (err) {
-      console.error("Google 登入失敗:", err);
     }
   };
 
@@ -398,7 +426,7 @@ export default function Home() {
     return (
       <div className="fixed inset-0 bg-slate-900 flex flex-col items-center justify-center text-white">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-violet-500 mb-4"></div>
-        <p className="text-slate-400">正在確認您的登入狀態...</p>
+        <p className="text-slate-400">確認安全連線中...</p>
       </div>
     );
   }
@@ -420,101 +448,23 @@ export default function Home() {
       
       {!user ? (
         <div className="flex-1 flex items-center justify-center p-4">
-          <div className="bg-slate-800 border border-slate-700 rounded-3xl p-6 w-full max-w-md shadow-2xl text-center">
+          <div className="bg-slate-800 border border-slate-700 rounded-3xl p-8 w-full max-w-md shadow-2xl text-center">
             <div className="w-16 h-16 rounded-full bg-violet-600/20 flex items-center justify-center text-3xl border border-violet-500/30 mx-auto mb-4">
               🐱
             </div>
-            <h1 className="text-2xl font-extrabold text-white mb-1">專屬 AI 助理</h1>
-            <p className="text-slate-400 text-sm mb-6">即時同步您的大腦偏好規則與跨裝置對話記憶</p>
+            <h1 className="text-2xl font-extrabold text-white mb-2">專屬 AI 助理</h1>
+            <p className="text-slate-400 text-sm mb-8 leading-relaxed">安全且無縫地同步您的大腦偏好設定</p>
             
-            {/* 登入 Tab 切換 */}
-            <div className="flex bg-slate-900/50 p-1 rounded-xl mb-6 border border-slate-700/50">
-              <button 
-                onClick={() => setAuthTab('email')} 
-                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${authTab === 'email' ? 'bg-violet-600 text-white shadow-md' : 'text-slate-400'}`}
-              >
-                Email 快速登入 (推薦)
-              </button>
-              <button 
-                onClick={() => setAuthTab('google')} 
-                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${authTab === 'google' ? 'bg-violet-600 text-white shadow-md' : 'text-slate-400'}`}
-              >
-                Google 登入
-              </button>
+            {/* 🌟 核心一鍵免帳密 Google 登入容器 */}
+            <div className="flex flex-col items-center justify-center space-y-4">
+              <div id="google-signin-btn" className="min-h-[50px]"></div>
+              
+              {!process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID && (
+                <p className="text-amber-400/80 text-xs px-2 leading-relaxed text-left">
+                  ⚠️ 系統提醒：請確認您已在專案的 <code>.env.local</code> 中配置 <code>NEXT_PUBLIC_GOOGLE_CLIENT_ID</code>，並已將其加到 Supabase 的 Authorized Client IDs，否則 Google 按鈕將無法渲染。
+                </p>
+              )}
             </div>
-
-            {authTab === 'email' ? (
-              <form onSubmit={handleEmailAuth} className="space-y-4 text-left">
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 mb-1">電子郵件信箱</label>
-                  <input 
-                    type="email" 
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="yourname@example.com"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-violet-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 mb-1">密碼</label>
-                  <input 
-                    type="password" 
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="輸入密碼 (至少 6 位數)"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-violet-500"
-                  />
-                </div>
-
-                {authError && (
-                  <p className="text-rose-400 text-xs bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-xl font-semibold">
-                    ⚠️ {authError}
-                  </p>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={authButtonLoading}
-                  className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-bold py-3.5 px-6 rounded-full active:scale-95 transition-all shadow-md text-sm mt-2"
-                >
-                  {authButtonLoading ? '請稍後...' : (isRegistering ? '立即註冊新帳號' : '登入此裝置')}
-                </button>
-
-                <div className="text-center pt-2">
-                  <button 
-                    type="button"
-                    onClick={() => { setIsRegistering(!isRegistering); setAuthError(''); }}
-                    className="text-xs text-violet-400 hover:text-violet-300 font-bold"
-                  >
-                    {isRegistering ? '已有帳號？返回登入頁' : '還沒有帳號？立即免費註冊'}
-                  </button>
-                </div>
-              </form>
-            ) : (
-              <div className="space-y-4 py-2">
-                <button
-                  onClick={handleGoogleLogin}
-                  className="w-full bg-white text-slate-900 hover:bg-slate-100 font-bold py-3.5 px-6 rounded-full flex items-center justify-center gap-3 active:scale-95 transition-all shadow-md text-sm"
-                >
-                  <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24">
-                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.85z"/>
-                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.85c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                  </svg>
-                  使用 Google 帳號快速登入
-                </button>
-                
-                <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 text-left">
-                  <p className="text-amber-400 font-bold text-xs mb-1">⚠️ 系統安全性提示：</p>
-                  <p className="text-slate-300 text-xs leading-relaxed">
-                    在 iOS / Android 的 App (PWA) 模式下，使用 Google 登入會強行喚醒手機外部瀏覽器而顯示網址列，且關閉 App 後需要重登。<b>強烈建議您改用「Email 快速登入」以獲得無網址列、永不掉登入的頂級 APP 體驗！</b>
-                  </p>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       ) : (
@@ -548,30 +498,27 @@ export default function Home() {
               </div>
             </div>
             
-            {/* 🌟 系統設定按鈕：換用官方 100% 完美渲染之 Heroicons 齒輪 (Cog-6-Tooth) SVG */}
+            {/* 🌟 系統設定：徹底移除圓圈背景，換成 100% 齒輪形狀、高對比的 Heroicons Cog SVG */}
             <button 
               onClick={() => setShowSettingsModal(true)}
-              className="bg-white/10 text-white rounded-xl active:scale-95 transition-all hover:bg-white/20 flex items-center justify-center border border-white/20"
+              className="text-white/80 hover:text-white active:scale-90 transition-all flex items-center justify-center bg-transparent border-0"
               style={{ 
-                width: '44px', 
-                height: '44px', 
-                minWidth: '44px', 
-                minHeight: '44px', 
+                width: '40px', 
+                height: '40px', 
+                minWidth: '40px', 
+                minHeight: '40px', 
                 flexShrink: 0
               }}
               title="系統設定"
             >
               <svg 
                 xmlns="http://www.w3.org/2000/svg" 
-                fill="none" 
                 viewBox="0 0 24 24" 
-                strokeWidth={1.5} 
-                stroke="currentColor" 
-                className="w-6 h-6 text-white"
-                style={{ width: '24px', height: '24px', display: 'block' }}
+                fill="currentColor" 
+                className="w-7 h-7"
+                style={{ width: '28px', height: '28px', display: 'block' }}
               >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.43l-1.003.828c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.43l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                <path fillRule="evenodd" d="M11.078 2.25c-.288 0-.538.188-.612.466l-.5 1.865c-.172.643-.82 1.05-1.479.887l-1.865-.46a.625.625 0 00-.73.34l-.994 1.722a.625.625 0 00.16.782l1.503 1.155c.522.4.636 1.135.253 1.666l-.01.014c-.384.532-1.12.651-1.644.275l-1.502-1.155a.625.625 0 00-.782.16l-.994 1.722a.625.625 0 00.34.73l1.865.5c.643.172 1.05.82.887 1.479l-.46 1.865a.625.625 0 00.466.612h1.988c.288 0 .538-.188.612-.466l.5-1.865c.172-.643.82-1.05 1.479-.887l1.865.46c.264.066.545-.058.67-.297l.994-1.722a.625.625 0 00-.16-.782l-1.503-1.155c-.522-.4-.636-1.135-.253-1.666l.01-.014c.384-.532 1.12-.651 1.644-.275l1.502 1.155c.241.185.578.12.742-.11l.994-1.722a.625.625 0 00-.34-.73l-1.865-.5a1.25 1.25 0 01-.887-1.479l.46-1.865a.625.625 0 00-.466-.612h-1.988zM12 15a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
               </svg>
             </button>
           </header>
