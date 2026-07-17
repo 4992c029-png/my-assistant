@@ -3,6 +3,13 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
+// 🌟 核心修正：告訴 TypeScript 編譯器 window 物件上存在 google 屬性，防止編譯失敗
+declare global {
+  interface Window {
+    google?: any;
+  }
+}
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
