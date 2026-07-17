@@ -182,14 +182,13 @@ export default function Home() {
     }
   };
 
-  // 🌟 4. 標準原頁面跳轉登入（100% 解決 PWA 內彈出新網頁且不關閉的問題）
+  // 🌟 4. 標準原頁面跳轉登入
   const handleGoogleLogin = async () => {
     if (!supabase) return;
     try {
       await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          // 原路導回根目錄 "/"，Supabase 會自動解析 URL 中的 Hash 並寫入 Cookie
           redirectTo: window.location.origin, 
         }
       });
@@ -443,7 +442,7 @@ export default function Home() {
               </div>
             </div>
             
-            {/* 🌟 5. 系統設定按鈕：改寫為標準 Lucide 齒輪 SVG，保證 100% 渲染成功 */}
+            {/* 系統設定按鈕：Lucide 齒輪 SVG */}
             <button 
               onClick={() => setShowSettingsModal(true)}
               className="bg-white/10 text-white rounded-xl active:scale-95 transition-all hover:bg-white/20 flex items-center justify-center"
@@ -469,7 +468,6 @@ export default function Home() {
                 className="w-6 h-6 text-white"
                 style={{ width: '24px', height: '24px', display: 'block', flexShrink: 0 }}
               >
-                {/* 標準 Lucide 齒輪 SVG 路徑 */}
                 <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
                 <circle cx="12" cy="12" r="3" />
               </svg>
@@ -640,7 +638,8 @@ export default function Home() {
                               >
                                 🗑️ 刪除
                               </button>
-                            </>
+                            </div> {/* 👈 之前這裡漏掉了閉合標籤，現已補上 */}
+                          </>
                         )}
                       </div>
                     ))
