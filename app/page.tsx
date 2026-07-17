@@ -202,7 +202,7 @@ export default function Home() {
       if (!window.google) return;
       try {
         window.google.accounts.id.initialize({
-          client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '732049870020-fksd6756vffggdfg.apps.googleusercontent.com', // 請確保替換成您自己的 Web Client ID
+          client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID // || '732049870020-fksd6756vffggdfg.apps.googleusercontent.com', // 請確保替換成您自己的 Web Client ID
           callback: async (response: any) => {
             setAuthLoading(true);
             const { data, error } = await supabase.auth.signInWithIdToken({
