@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
+export const preferredRegion = 'sfo1'; // 👈 強制指定 Vercel 伺服器在美西執行
 export const dynamic = 'force-dynamic';
 
 const supabase = createClient(
