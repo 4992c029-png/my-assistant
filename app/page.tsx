@@ -6,47 +6,50 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-// 🌟 1. 建立 100% 穩定的 Cookie 儲存引擎（徹底解決重開 APP 掉登入的問題）
-const cookieStorage = {
+// 🌟 雙重強固儲存引擎（同時寫入 Cookie 與 LocalStorage，防禦 iOS 的快取清理）
+const dualStorage = {
   getItem: (key: string): string | null => {
-    if (typeof document === 'undefined') return null;
+    if (typeof window === 'undefined') return null;
+    let value = null;
     const name = key + "=";
     const decodedCookie = decodeURIComponent(document.cookie);
     const ca = decodedCookie.split(';');
     for (let i = 0; i < ca.length; i++) {
       let c = ca[i];
-      while (c.charAt(0) === ' ') {
-        c = c.substring(1);
-      }
+      while (c.charAt(0) === ' ') c = c.substring(1);
       if (c.indexOf(name) === 0) {
-        return c.substring(name.length, c.length);
+        value = c.substring(name.length, c.length);
+        break;
       }
     }
-    return null;
+    if (!value) {
+      value = localStorage.getItem(key);
+    }
+    return value;
   },
   setItem: (key: string, value: string): void => {
-    if (typeof document === 'undefined') return;
-    // 設定 365 天長效過期時間，確保不被系統清理
+    if (typeof window === 'undefined') return;
     const date = new Date();
-    date.setTime(date.getTime() + (365 * 24 * 60 * 60 * 1000));
+    date.setTime(date.getTime() + (365 * 24 * 60 * 60 * 1000)); // 365天長效
     const expires = "; expires=" + date.toUTCString();
     document.cookie = key + "=" + encodeURIComponent(value) + expires + "; path=/; SameSite=Lax; Secure";
+    localStorage.setItem(key, value);
   },
   removeItem: (key: string): void => {
-    if (typeof document === 'undefined') return;
+    if (typeof window === 'undefined') return;
     document.cookie = key + "=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; SameSite=Lax; Secure";
+    localStorage.removeItem(key);
   }
 };
 
-// 🌟 2. 初始化 Supabase 並綁定 Cookie 儲存引擎
 const supabase = typeof window !== 'undefined' 
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
         persistSession: true,
-        storageKey: 'sb-pwa-cookie-session',
-        storage: cookieStorage, // 👈 強制改用 Cookie 儲存
+        storageKey: 'sb-pwa-dual-session',
+        storage: dualStorage,
         autoRefreshToken: true,
-        detectSessionInUrl: true // 👈 關鍵：讓根目錄自動解析 Google 帶回來的 Hash
+        detectSessionInUrl: true
       }
     })
   : null;
@@ -60,6 +63,14 @@ export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [userId, setUserId] = useState('');
+
+  // 登入介面狀態
+  const [authTab, setAuthTab] = useState<'email' | 'google'>('email');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [authButtonLoading, setAuthButtonLoading] = useState(false);
 
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
@@ -112,7 +123,7 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 🌟 3. 初始化登入驗證
+  // 初始化登入狀態
   useEffect(() => {
     if (!supabase) {
       setAuthLoading(false);
@@ -133,7 +144,6 @@ export default function Home() {
         setAuthLoading(false);
       }
 
-      // 監聽登入與登出狀態變化
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
         if (event === 'SIGNED_IN' && currentSession?.user) {
           setUser(currentSession.user);
@@ -152,11 +162,8 @@ export default function Home() {
 
     const subPromise = initAuthentication();
 
-    // 註冊 PWA Service Worker
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js')
-        .then((reg) => console.log('Service Worker 註冊成功:', reg.scope))
-        .catch((err) => console.error('Service Worker 註冊失敗:', err));
+      navigator.serviceWorker.register('/sw.js').catch((err) => console.error(err));
     }
 
     const savedSize = localStorage.getItem('app_font_size') as 'small' | 'medium' | 'large';
@@ -182,7 +189,32 @@ export default function Home() {
     }
   };
 
-  // 🌟 4. 標準原頁面跳轉登入
+  // 🌟 Email 登入/註冊處理（100% 不跳轉，完美保持在 PWA APP 中）
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supabase) return;
+    setAuthError('');
+    setAuthButtonLoading(true);
+
+    try {
+      if (isRegistering) {
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+        if (data.user && !data.session) {
+          alert('註冊成功！請檢查您的郵箱以驗證帳號。');
+        }
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      }
+    } catch (err: any) {
+      setAuthError(err.message || '認證失敗，請檢查輸入');
+    } finally {
+      setAuthButtonLoading(false);
+    }
+  };
+
+  // 傳統 Google 轉跳登入
   const handleGoogleLogin = async () => {
     if (!supabase) return;
     try {
@@ -392,23 +424,97 @@ export default function Home() {
             <div className="w-16 h-16 rounded-full bg-violet-600/20 flex items-center justify-center text-3xl border border-violet-500/30 mx-auto mb-4">
               🐱
             </div>
-            <h1 className="text-2xl font-extrabold text-white mb-2">專屬 AI 助理</h1>
-            <p className="text-slate-400 text-sm mb-8">即時同步您的大腦偏好規則與跨裝置對話記憶</p>
+            <h1 className="text-2xl font-extrabold text-white mb-1">專屬 AI 助理</h1>
+            <p className="text-slate-400 text-sm mb-6">即時同步您的大腦偏好規則與跨裝置對話記憶</p>
             
-            <div className="py-4">
-              <button
-                onClick={handleGoogleLogin}
-                className="w-full bg-white text-slate-900 hover:bg-slate-100 font-bold py-3.5 px-6 rounded-full flex items-center justify-center gap-3 active:scale-95 transition-all shadow-md text-base"
+            {/* 登入 Tab 切換 */}
+            <div className="flex bg-slate-900/50 p-1 rounded-xl mb-6 border border-slate-700/50">
+              <button 
+                onClick={() => setAuthTab('email')} 
+                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${authTab === 'email' ? 'bg-violet-600 text-white shadow-md' : 'text-slate-400'}`}
               >
-                <svg className="w-5.5 h-5.5 flex-shrink-0" viewBox="0 0 24 24">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.85z"/>
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.85c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                </svg>
-                使用 Google 帳號快速登入
+                Email 快速登入 (推薦)
+              </button>
+              <button 
+                onClick={() => setAuthTab('google')} 
+                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${authTab === 'google' ? 'bg-violet-600 text-white shadow-md' : 'text-slate-400'}`}
+              >
+                Google 登入
               </button>
             </div>
+
+            {authTab === 'email' ? (
+              <form onSubmit={handleEmailAuth} className="space-y-4 text-left">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 mb-1">電子郵件信箱</label>
+                  <input 
+                    type="email" 
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="yourname@example.com"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-violet-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 mb-1">密碼</label>
+                  <input 
+                    type="password" 
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="輸入密碼 (至少 6 位數)"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-violet-500"
+                  />
+                </div>
+
+                {authError && (
+                  <p className="text-rose-400 text-xs bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-xl font-semibold">
+                    ⚠️ {authError}
+                  </p>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={authButtonLoading}
+                  className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-bold py-3.5 px-6 rounded-full active:scale-95 transition-all shadow-md text-sm mt-2"
+                >
+                  {authButtonLoading ? '請稍後...' : (isRegistering ? '立即註冊新帳號' : '登入此裝置')}
+                </button>
+
+                <div className="text-center pt-2">
+                  <button 
+                    type="button"
+                    onClick={() => { setIsRegistering(!isRegistering); setAuthError(''); }}
+                    className="text-xs text-violet-400 hover:text-violet-300 font-bold"
+                  >
+                    {isRegistering ? '已有帳號？返回登入頁' : '還沒有帳號？立即免費註冊'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-4 py-2">
+                <button
+                  onClick={handleGoogleLogin}
+                  className="w-full bg-white text-slate-900 hover:bg-slate-100 font-bold py-3.5 px-6 rounded-full flex items-center justify-center gap-3 active:scale-95 transition-all shadow-md text-sm"
+                >
+                  <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.85z"/>
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.85c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                  </svg>
+                  使用 Google 帳號快速登入
+                </button>
+                
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 text-left">
+                  <p className="text-amber-400 font-bold text-xs mb-1">⚠️ 系統安全性提示：</p>
+                  <p className="text-slate-300 text-xs leading-relaxed">
+                    在 iOS / Android 的 App (PWA) 模式下，使用 Google 登入會強行喚醒手機外部瀏覽器而顯示網址列，且關閉 App 後需要重登。<b>強烈建議您改用「Email 快速登入」以獲得無網址列、永不掉登入的頂級 APP 體驗！</b>
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       ) : (
@@ -442,34 +548,30 @@ export default function Home() {
               </div>
             </div>
             
-            {/* 系統設定按鈕：Lucide 齒輪 SVG */}
+            {/* 🌟 系統設定按鈕：換用官方 100% 完美渲染之 Heroicons 齒輪 (Cog-6-Tooth) SVG */}
             <button 
               onClick={() => setShowSettingsModal(true)}
-              className="bg-white/10 text-white rounded-xl active:scale-95 transition-all hover:bg-white/20 flex items-center justify-center"
+              className="bg-white/10 text-white rounded-xl active:scale-95 transition-all hover:bg-white/20 flex items-center justify-center border border-white/20"
               style={{ 
                 width: '44px', 
                 height: '44px', 
                 minWidth: '44px', 
                 minHeight: '44px', 
-                flexShrink: 0,
-                padding: '0px', 
-                border: '1px solid rgba(255,255,255,0.2)',
+                flexShrink: 0
               }}
               title="系統設定"
             >
               <svg 
                 xmlns="http://www.w3.org/2000/svg" 
-                viewBox="0 0 24 24" 
                 fill="none" 
+                viewBox="0 0 24 24" 
+                strokeWidth={1.5} 
                 stroke="currentColor" 
-                strokeWidth="2" 
-                strokeLinecap="round" 
-                strokeLinejoin="round" 
                 className="w-6 h-6 text-white"
-                style={{ width: '24px', height: '24px', display: 'block', flexShrink: 0 }}
+                style={{ width: '24px', height: '24px', display: 'block' }}
               >
-                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-                <circle cx="12" cy="12" r="3" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.43l-1.003.828c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.43l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
               </svg>
             </button>
           </header>
@@ -577,7 +679,7 @@ export default function Home() {
                     </div>
                   )}
                   <div className="min-w-0 flex-1">
-                    <p className="text-slate-200 font-bold truncate leading-snug">{user?.user_metadata?.full_name || 'Google 使用者'}</p>
+                    <p className="text-slate-200 font-bold truncate leading-snug">{user?.user_metadata?.full_name || user?.email?.split('@')[0] || '使用者'}</p>
                     <p className="text-slate-400 text-xs truncate leading-normal">{user?.email}</p>
                   </div>
                 </div>
@@ -638,7 +740,7 @@ export default function Home() {
                               >
                                 🗑️ 刪除
                               </button>
-                            </div> {/* 👈 之前這裡漏掉了閉合標籤，現已補上 */}
+                            </div>
                           </>
                         )}
                       </div>
