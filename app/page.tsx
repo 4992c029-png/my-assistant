@@ -95,6 +95,12 @@ export default function Home() {
     if (!supabase) {
       setAuthLoading(false);
       return;
+ // 註冊 PWA 服務
+   if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+     navigator.serviceWorker.register('/sw.js')
+      .then((reg) => console.log('Service Worker 註冊成功:', reg.scope))
+      .catch((err) => console.error('Service Worker 註冊失敗:', err));
+      
     }
 
     const initAuthentication = async () => {
