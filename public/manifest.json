@@ -1,17 +1,9 @@
 {
   "name": "專屬 AI 助理",
   "short_name": "AI 助理",
-  "description": "您的專屬大腦 AI 助理",
   "start_url": "/",
   "display": "standalone",
-  "orientation": "portrait",
   "background_color": "#0f172a",
-  "theme_color": "#7c3aed",
-  "icons": [
-    {
-      "src": "https://cdn-icons-png.flaticon.com/512/4712/4712139.png",
-      "sizes": "512x512",
-      "type": "image/png"
-    }
-  ]
+  "theme-color": "#7c3aed",
+  "scope": "/"
 }
