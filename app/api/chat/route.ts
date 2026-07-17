@@ -81,7 +81,7 @@ ${userPreferences}
 
     // 🌟 7. 呼叫 Gemini 取得回答 (升級為 gemini-2.0-flash)
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash', 
+      model: 'gemini-2.5-flash-lite', 
       contents: contents, 
       config: { systemInstruction: systemPrompt },
     });
