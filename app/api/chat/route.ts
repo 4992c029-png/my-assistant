@@ -79,11 +79,11 @@ async function sendMessageWithRetry(chatSession: any, payload: any, maxRetries =
         String(error?.message).includes('high demand');
 
       if (isTransientError && attempt < maxRetries) {
-        console.warn(`[Gemini API Warning] 遇到 503 過載，等待 ${delay}ms 後進行第 ${attempt} 次重試...`);
+        console.warn(`[Gemini API Warning] 遇到流量過載 (${error?.status})，等待 ${delay}ms 後重新嘗試...`);
         await new Promise((resolve) => setTimeout(resolve, delay));
-        delay *= 2; // 指數退避，每次延遲翻倍
+        delay *= 2;
       } else {
-        throw error; // 非暫時性錯誤或超過重試次數則拋出
+        throw error;
       }
     }
   }
@@ -94,7 +94,7 @@ export async function POST(req: Request) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
-        { error: '系統未設定 GEMINI_API_KEY，請至 Vercel 專案設定 Environment Variables。' },
+        { error: '系統未設定 GEMINI_API_KEY，請至 Vercel 設定 Environment Variables。' },
         { status: 500 }
       );
     }
@@ -115,19 +115,30 @@ export async function POST(req: Request) {
 
     const userRules = instructionsData?.map((item) => item.instruction).join('\n') || '';
 
-    // 2. 讀取歷史對話紀錄 (最多 20 條)
-    const { data: historyData } = await supabase
-      .from('chat_history')
-      .select('role, content')
+    // 2. 讀取 daily_chat_history 近期 7 天對話紀錄
+    const { data: dailyRecords } = await supabase
+      .from('daily_chat_history')
+      .select('messages')
       .eq('user_id', userId)
-      .order('created_at', { ascending: true })
-      .limit(20);
+      .order('chat_date', { ascending: true })
+      .limit(7);
 
-    const formattedHistory =
-      historyData?.map((item) => ({
-        role: item.role === 'user' ? 'user' : 'model',
-        parts: [{ text: item.content }],
-      })) || [];
+    // 展平 JSONB 裡的所有對話訊息
+    let allMessages: Array<{ role: string; content: string }> = [];
+    if (dailyRecords && dailyRecords.length > 0) {
+      for (const record of dailyRecords) {
+        if (Array.isArray(record.messages)) {
+          allMessages.push(...record.messages);
+        }
+      }
+    }
+
+    // 取最近的 20 則對話做為對話上下文
+    const recentMessages = allMessages.slice(-20);
+    const formattedHistory = recentMessages.map((item) => ({
+      role: item.role === 'user' ? 'user' : 'model',
+      parts: [{ text: item.content || '' }],
+    }));
 
     // 3. 設定系統 Prompt
     const systemInstruction = `你是一位貼心且專業的個人 AI 助理。
@@ -143,14 +154,13 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
 4. 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
 5.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！`;
 
-    // 4. 定義優先使用與備援的模型清單
+    // 4. 定義模型嘗試清單
     const candidateModels = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
     let result: any = null;
     let responseText = '';
-
-    // 5. 嘗試與模型進行對話 (具備模型切換與重試機制)
     let lastError: any = null;
 
+    // 5. 嘗試與模型互動 (具備備援切換與過載重試機制)
     for (const modelName of candidateModels) {
       try {
         const model = genAI.getGenerativeModel({
@@ -161,7 +171,6 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
 
         const chat = model.startChat({ history: formattedHistory });
 
-        // 呼叫帶有自動重試的 sendMessage
         result = await sendMessageWithRetry(chat, message);
         let response = await result.response;
         responseText = response.text();
@@ -210,7 +219,7 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
               {
                 functionResponse: {
                   name: 'save_instruction',
-                  response: { success: true, message: `已成功儲存偏好規則：${instruction}` },
+                  response: { success: true, message: `已成功儲存偏用規則：${instruction}` },
                 },
               },
             ]);
@@ -218,33 +227,61 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
           }
         }
 
-        // 成功執行完成，跳出模型嘗試迴圈
         lastError = null;
-        break;
+        break; // 成功回傳後跳出循環
       } catch (err: any) {
         lastError = err;
-        console.warn(`[Gemini API Model Error] 模型 ${modelName} 失敗，嘗試切換備援模型... 錯誤:`, err?.message);
+        console.warn(`[Gemini API Error] 模型 ${modelName} 失敗，嘗試備援模型... 錯誤:`, err?.message);
       }
     }
 
     if (lastError) {
-      throw lastError; // 若所有模型均嘗試失敗，拋出最後錯誤
+      throw lastError;
     }
 
-    // 7. 將本次對話紀錄存入 Supabase
-    await supabase.from('chat_history').insert([
-      { user_id: userId, role: 'user', content: message },
-      { user_id: userId, role: 'model', content: responseText },
-    ]);
+    // 7. 將本次對話追加寫入 daily_chat_history (使用 UTC 日期 YYYY-MM-DD)
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    // 讀取當天現有的對話陣列
+    const { data: todayRecord } = await supabase
+      .from('daily_chat_history')
+      .select('messages')
+      .eq('user_id', userId)
+      .eq('chat_date', todayStr)
+      .maybeSingle();
+
+    const currentMessages = Array.isArray(todayRecord?.messages) ? todayRecord.messages : [];
+
+    const updatedMessages = [
+      ...currentMessages,
+      { role: 'user', content: message, timestamp: new Date().toISOString() },
+      { role: 'model', content: responseText, timestamp: new Date().toISOString() },
+    ];
+
+    // 利用 upsert 自動依照 unique(user_id, chat_date) 建立或更新當天紀錄
+    const { error: upsertError } = await supabase
+      .from('daily_chat_history')
+      .upsert(
+        {
+          user_id: userId,
+          chat_date: todayStr,
+          messages: updatedMessages,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,chat_date' }
+      );
+
+    if (upsertError) {
+      console.error('寫入 daily_chat_history 失敗:', upsertError);
+    }
 
     return NextResponse.json({ reply: responseText });
   } catch (err: any) {
     console.error('Chat API 錯誤:', err);
 
-    // 回傳友善錯誤訊息給前端
     if (err?.status === 503 || String(err?.message).includes('503')) {
       return NextResponse.json(
-        { error: 'Google AI 服務目前流量過高，請稍後再試一次。' },
+        { error: 'Google AI 服務目前流量過高，請稍後再試。' },
         { status: 503 }
       );
     }
