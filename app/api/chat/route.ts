@@ -219,7 +219,7 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
               {
                 functionResponse: {
                   name: 'save_instruction',
-                  response: { success: true, message: `已成功儲存偏用規則：${instruction}` },
+                  response: { success: true, message: `已成功儲存偏好規則：${instruction}` },
                 },
               },
             ]);
@@ -250,7 +250,9 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
       .eq('chat_date', todayStr)
       .maybeSingle();
 
-    const currentMessages = Array.isArray(todayRecord?.messages) ? todayRecord.messages : [];
+    // 🛠️ 解決 TypeScript 'todayRecord' is possibly 'null' 錯誤
+    const rawMessages = todayRecord?.messages;
+    const currentMessages = Array.isArray(rawMessages) ? rawMessages : [];
 
     const updatedMessages = [
       ...currentMessages,
