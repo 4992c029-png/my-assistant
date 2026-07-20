@@ -11,20 +11,26 @@ const supabase = createClient(
 );
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
-// 🌟 定義 Gemini 工具：自動設定與關閉鬧鐘
+// 🌟 定義 Gemini 工具：自動【設定】與【關閉/取消】鬧鐘
 const reminderTools = {
   functionDeclarations: [
     {
       name: 'set_reminder',
-      description: '當使用者要求設定提醒、備忘錄、鬧鐘或週期提醒時必須呼叫此工具。',
+      description: '當使用者想要設定備忘錄、鬧鐘、日程提醒或週期性提醒時呼叫此工具。',
       parameters: {
         type: Type.OBJECT,
         properties: {
-          title: { type: Type.STRING, description: '提醒事項內容或主題（例如：喝水、開會）' },
-          remind_at: { type: Type.STRING, description: '標準 ISO 8601 時間字串 (例如 2026-07-20T15:00:00.000Z)' },
+          title: { 
+            type: Type.STRING, 
+            description: '提醒事項的內容或主題，例如：喝水、開會、吃藥' 
+          },
+          remind_at: { 
+            type: Type.STRING, 
+            description: '提醒時間，請根據當前時間計算並格式化為完整的 ISO 8601 字串 (例如：2026-07-20T15:00:00+08:00)' 
+          },
           repeat_type: { 
             type: Type.STRING, 
-            description: '重複類型: none (單次), daily (每天), weekly (每週), monthly (每月)',
+            description: '週期重複類型: none (不重複), daily (每天), weekly (每週), monthly (每月)',
             enum: ['none', 'daily', 'weekly', 'monthly']
           },
           reminder_type: { 
@@ -38,13 +44,16 @@ const reminderTools = {
     },
     {
       name: 'cancel_reminder',
-      description: '當使用者要求取消、關閉、刪除鬧鐘或提醒時必須呼叫此工具。',
+      description: '當使用者要求關閉、取消、刪除或關掉已設定的鬧鐘或提醒事項時呼叫此工具。',
       parameters: {
         type: Type.OBJECT,
         properties: {
-          keyword: { type: Type.STRING, description: '想要關閉的提醒關鍵字（例如：喝水、開會，若使用者說全部關閉則傳入 "all"）' }
+          title: { 
+            type: Type.STRING, 
+            description: '要取消或關閉的提醒標題關鍵字（例如：喝水、開會）。若使用者說「取消所有提醒」請帶入 "all"' 
+          }
         },
-        required: ['keyword']
+        required: ['title']
       }
     }
   ]
@@ -62,20 +71,22 @@ export async function POST(req: Request) {
     const todayStr = now.toISOString().split('T')[0];
     const userMsg = { role: 'user', content: message, created_at: now.toISOString() };
 
-    // 1. 讀取歷史對話
-    const { data: allHistory } = await supabase
+    // 1. 獲取歷史紀錄
+    const { data: allHistory, error: fetchHistoryError } = await supabase
       .from('daily_chat_history')
       .select('chat_date, messages')
       .eq('user_id', userId)
       .order('chat_date', { ascending: true })
-      .limit(180);
+      .limit(180); 
+
+    if (fetchHistoryError) console.error("❌ 撈取歷史紀錄失敗:", fetchHistoryError);
 
     const todayRow = allHistory?.find((h: any) => h.chat_date === todayStr);
     const existingTodayMessages = todayRow ? (todayRow.messages || []) : [];
     const historyData = allHistory ? allHistory.flatMap((day: any) => day.messages || []) : [];
     const geminiHistory = [...historyData, userMsg];
 
-    // 2. 讀取大腦規則
+    // 2. 讀取偏好規則
     const { data: instructionsData } = await supabase
       .from('user_instructions')
       .select('instruction')
@@ -90,27 +101,24 @@ export async function POST(req: Request) {
       parts: [{ text: h.content }]
     }));
 
-    // 精確傳遞台灣時間上下文 (UTC+8)
-    const taipeiTimeStr = now.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
-
+    // 3. 設計 System Prompt
     const systemPrompt = `
-你是一個客製化的專屬 AI 助理。
-當前精確時間是台灣時間 (Asia/Taipei)：${taipeiTimeStr} (UTC: ${now.toISOString()})。
+你是一個客製化的專屬 AI 助理。現在的台北精確時間是：${now.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })} (ISO: ${now.toISOString()})。
 
-【使用者的最高指導大腦規則】
+【最高指導偏好大腦】
 ${userPreferences}
+
 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
 
 【Execution Rules 防止幻覺硬性規定】
 1.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！
 
-【提醒與鬧鐘執行硬性規定】
-1. 當使用者要求「設定」提醒/鬧鐘時，你【必須】呼叫 \`set_reminder\` 工具，絕對不允許在沒有呼叫工具的情況下假裝設定成功！
-2. 當使用者要求「取消/關閉/刪除」提醒/鬧鐘時，你【必須】呼叫 \`cancel_reminder\` 工具，絕對不允許只用文字宣稱已關閉！
-3. 請根據目前的台灣時間精確推算 ISO 8601 時間傳給工具。
+【提醒與鬧鐘指令操作規範】
+1. 若使用者要求「設定/提醒/鬧鐘」，請呼叫 set_reminder 工具。
+2. 若使用者要求「關閉/取消/刪除/不用提醒了」，請呼叫 cancel_reminder 工具。
 `;
 
-    // 3. 呼叫 Gemini
+    // 4. 呼叫 Gemini API
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-lite', 
       contents: contents, 
@@ -121,57 +129,79 @@ ${userPreferences}
     });
 
     let replyText = '';
-    const functionCalls = response.functionCalls;
 
+    // 🌟 5. 解析與執行 Tool Call (設定與取消)
+    const functionCalls = response.functionCalls;
     if (functionCalls && functionCalls.length > 0) {
       const call = functionCalls[0];
 
-      // 🌟 1. 設定提醒
+      // ----------------- 功能 A: 新增/設定提醒 -----------------
       if (call.name === 'set_reminder') {
         const args: any = call.args;
         
-        const { error: insertError } = await supabase
+        // 修正時間解析，防止 PostgreSQL 格式報錯
+        let parsedDate = new Date(args.remind_at);
+        if (isNaN(parsedDate.getTime())) {
+          parsedDate = new Date(Date.now() + 10 * 60 * 1000); // 防呆 fallback 10分鐘後
+        }
+
+        const { data: insertData, error: insertError } = await supabase
           .from('user_reminders')
           .insert([{
             user_id: userId,
             title: args.title,
-            remind_at: args.remind_at,
+            remind_at: parsedDate.toISOString(),
             repeat_type: args.repeat_type || 'none',
             reminder_type: args.reminder_type || 'both',
             is_triggered: false
-          }]);
+          }])
+          .select();
 
-        if (!insertError) {
-          const formattedTime = new Date(args.remind_at).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
-          const repeatDesc = args.repeat_type === 'daily' ? ' (每天重複)' : args.repeat_type === 'weekly' ? ' (每週重複)' : args.repeat_type === 'monthly' ? ' (每月重複)' : '';
-          replyText = `⏰ 已成功為您設定提醒囉！\n\n📌 內容：${args.title}\n📅 時間：${formattedTime}${repeatDesc}`;
+        if (insertError) {
+          console.error("❌ 寫入資料庫失敗:", insertError);
+          replyText = `⚠️ 抱歉，設定提醒時資料庫發生錯誤：${insertError.message}`;
         } else {
-          console.error("❌ 寫入提醒失敗:", insertError);
-          replyText = `抱歉，為您設定提醒「${args.title}」時資料庫寫入失敗，請確認時間格式。`;
+          const formattedTime = parsedDate.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+          const repeatDesc = args.repeat_type === 'daily' ? ' (每天重複)' : args.repeat_type === 'weekly' ? ' (每週重複)' : args.repeat_type === 'monthly' ? ' (每月重複)' : '';
+          replyText = `⏰ 已成功為您設定提醒！\n\n📌 內容：${args.title}\n📅 時間：${formattedTime}${repeatDesc}`;
         }
       } 
-      // 🌟 2. 取消/關閉提醒 (API 後端判斷關閉)
+      // ----------------- 功能 B: 關閉/取消提醒 -----------------
       else if (call.name === 'cancel_reminder') {
         const args: any = call.args;
-        const keyword = args.keyword;
+        const targetTitle = args.title;
 
-        let query = supabase
-          .from('user_reminders')
-          .delete()
-          .eq('user_id', userId)
-          .eq('is_triggered', false);
+        if (targetTitle === 'all' || targetTitle === '所有') {
+          // 清除該使用者的所有待觸發提醒
+          const { error: delError } = await supabase
+            .from('user_reminders')
+            .delete()
+            .eq('user_id', userId);
 
-        if (keyword !== 'all') {
-          query = query.ilike('title', `%${keyword}%`);
-        }
-
-        const { data: deletedData, error: deleteError } = await query.select();
-
-        if (!deleteError && deletedData && deletedData.length > 0) {
-          const titles = deletedData.map(d => d.title).join('、');
-          replyText = `🔕 已為您關閉並取消以下提醒：\n📌 ${titles}`;
+          if (delError) {
+            replyText = `⚠️ 關閉所有提醒時發生錯誤：${delError.message}`;
+          } else {
+            replyText = `🔕 已為您關閉並刪除所有未觸發的鬧鐘與提醒囉！`;
+          }
         } else {
-          replyText = `🔍 找不到包含關鍵字「${keyword}」的待觸發提醒事項喔！`;
+          // 模糊搜尋並刪除對應提醒
+          const { data: matched, error: searchError } = await supabase
+            .from('user_reminders')
+            .select('*')
+            .eq('user_id', userId)
+            .ilike('title', `%${targetTitle}%`);
+
+          if (searchError) {
+            replyText = `⚠️ 查詢要關閉的提醒時發生錯誤：${searchError.message}`;
+          } else if (!matched || matched.length === 0) {
+            replyText = `🔍 找不到包含「${targetTitle}」的未觸發提醒。`;
+          } else {
+            const idsToDelete = matched.map(m => m.id);
+            await supabase.from('user_reminders').delete().in('id', idsToDelete);
+            
+            const deletedNames = matched.map(m => m.title).join('、');
+            replyText = `🔕 已為您關閉並刪除提醒：「${deletedNames}」！`;
+          }
         }
       }
     } else {
@@ -179,24 +209,20 @@ ${userPreferences}
     }
 
     const modelMsg = { role: 'model', content: replyText, created_at: new Date().toISOString() };
-    const finalMessages = [...existingTodayMessages, userMsg, modelMsg];
 
-    await supabase
-      .from('daily_chat_history')
-      .upsert(
-        { 
-          user_id: userId, 
-          chat_date: todayStr, 
-          messages: finalMessages, 
-          updated_at: new Date().toISOString() 
-        },
-        { onConflict: 'user_id,chat_date' }
-      );
+    // 6. 儲存對話歷史
+    const finalMessages = [...existingTodayMessages, userMsg, modelMsg];
+    await supabase.from('daily_chat_history').upsert({ 
+      user_id: userId, 
+      chat_date: todayStr, 
+      messages: finalMessages, 
+      updated_at: new Date().toISOString() 
+    }, { onConflict: 'user_id,chat_date' });
 
     return Response.json({ reply: replyText });
 
   } catch (error: any) {
     console.error('API 錯誤:', error);
-    return Response.json({ error: error.message || '伺服器錯誤' }, { status: 500 });
+    return Response.json({ error: error.message || '伺服器內部錯誤' }, { status: 500 });
   }
 }
