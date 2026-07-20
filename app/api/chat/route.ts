@@ -3,12 +3,12 @@ import {
   GoogleGenerativeAI,
   FunctionDeclaration,
   Tool,
-  FunctionDeclarationSchemaType,
+  SchemaType,
 } from '@google/generative-ai';
 import { createClient } from '@supabase/supabase-js';
 
-// 🛠️ 將 FunctionDeclarationSchemaType 映射為 Type，解決匯入錯誤
-const Type = FunctionDeclarationSchemaType;
+// 🛠️ 將 SchemaType 映射為 Type，維持 Type.OBJECT 與 Type.STRING 的寫法
+const Type = SchemaType;
 
 // 初始化 Supabase Client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
