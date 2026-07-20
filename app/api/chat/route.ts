@@ -115,7 +115,7 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
 
     // 4. 初始化 Gemini 模型
     const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
+      model: 'gemini-2.5-flash-lite',
       systemInstruction: systemInstruction,
       tools: tools,
     });
