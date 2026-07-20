@@ -101,7 +101,7 @@ export async function POST(req: Request) {
 當前系統 UTC 時間為：${new Date().toISOString()}。
 
 使用者設定的個人習慣與大腦規則：
-${userPreferences}
+${userRules ? userRules : '目前尚無特殊偏好設定。'}
 
 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
 
