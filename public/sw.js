@@ -65,7 +65,33 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
-// 監聽背景推播通知點擊
+// 🌟 強制背景推播：手機鎖屏/App關閉時由系統喚醒並彈出鬧鐘
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+
+  try {
+    const data = event.data.json();
+    const title = data.title || '⏰ 鬧鐘提醒';
+    const options = {
+      body: data.body || '您的提醒時間到了！',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      vibrate: [500, 250, 500, 250, 500, 250, 500],
+      tag: data.id || 'alarm-notification',
+      renotify: true,
+      requireInteraction: true, // 強制保持在螢幕上，使用者不點擊不消失
+      data: data
+    };
+
+    event.waitUntil(
+      self.registration.showNotification(title, options)
+    );
+  } catch (err) {
+    console.error("Push 事件處理失敗:", err);
+  }
+});
+
+// 點擊推播開啟 App
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(
