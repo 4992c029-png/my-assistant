@@ -1,9 +1,8 @@
 // app/page.tsx
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-// 🌟 核心修正：告訴 TypeScript 編譯器 window 物件上存在 google 屬性，防止編譯失敗
 declare global {
   interface Window {
     google?: any;
@@ -13,7 +12,6 @@ declare global {
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-// 🌟 雙重強固儲存引擎：確保 Token 在 PWA 沙盒重啟時不會被 iOS 隨機清除
 const dualStorage = {
   getItem: (key: string): string | null => {
     if (typeof window === 'undefined') return null;
@@ -37,7 +35,7 @@ const dualStorage = {
   setItem: (key: string, value: string): void => {
     if (typeof window === 'undefined') return;
     const date = new Date();
-    date.setTime(date.getTime() + (365 * 24 * 60 * 60 * 1000)); // 365天超長效
+    date.setTime(date.getTime() + (365 * 24 * 60 * 60 * 1000));
     const expires = "; expires=" + date.toUTCString();
     document.cookie = key + "=" + encodeURIComponent(value) + expires + "; path=/; SameSite=Lax; Secure";
     localStorage.setItem(key, value);
@@ -66,6 +64,9 @@ const isValidUUID = (id: string) => {
   return uuidRegex.test(id);
 };
 
+// 🔊 系統內建電子鬧鐘嗶嗶聲 (Base64 音訊)，免去外部載入失敗的問題
+const BEEP_AUDIO_BASE64 = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==";
+
 export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -78,6 +79,7 @@ export default function Home() {
   const [feedbackStatus, setFeedbackStatus] = useState<Record<string, 'like' | 'dislike'>>({});
   const [fontSize, setFontSize] = useState<'small' | 'medium' | 'large'>('medium');
 
+  // Modals 控制
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
   const [showDislikeModal, setShowDislikeModal] = useState(false);
@@ -89,6 +91,17 @@ export default function Home() {
   const [instructions, setInstructions] = useState<any[]>([]);
   const [editingInstructionId, setEditingInstructionId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
+
+  // ⏰ 新增：提醒與鬧鐘狀態
+  const [reminders, setReminders] = useState<any[]>([]);
+  const [newReminderTitle, setNewReminderTitle] = useState('');
+  const [newReminderTime, setNewReminderTime] = useState('');
+  const [newReminderType, setNewReminderType] = useState<'alert' | 'audio' | 'both'>('both');
+  const [activeAlarm, setActiveAlarm] = useState<any | null>(null); // 當前正在響的鬧鐘
+  
+  // Refs
+  const messagesEndRef = useRef<HTMLDivElement | null>(null); // 🌟 用於自動往下滾動的 Ref
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const sizeStyles = {
     small: {
@@ -122,7 +135,141 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 🌟 動態注入 iOS PWA 全螢幕（隱藏網址列）所需的所有關鍵 Meta 標籤
+  // 🌟 核心功能一：自動滾動到底部
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]); // 當訊息陣列有任何變化，立刻觸發置底
+
+  // 初始化音效
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const audio = new Audio(BEEP_AUDIO_BASE64);
+      audio.loop = true;
+      audioRef.current = audio;
+    }
+  }, []);
+
+  // 🌟 核心功能二：鬧鐘/提醒輪詢器 (每秒比對時間)
+  useEffect(() => {
+    if (!userId || reminders.length === 0) return;
+
+    const interval = setInterval(() => {
+      const now = new Date();
+      reminders.forEach(async (reminder) => {
+        if (reminder.is_triggered) return;
+        
+        const remindTime = new Date(reminder.remind_at);
+        // 當前時間大於等於設定提醒時間
+        if (now >= remindTime) {
+          // 標記為已觸發，防止重複響起
+          reminder.is_triggered = true;
+          triggerReminder(reminder);
+        }
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [reminders, userId]);
+
+  // 觸發提醒事件
+  const triggerReminder = async (reminder: any) => {
+    if (!supabase || !isValidUUID(userId)) return;
+
+    // 1. 更新資料庫狀態為已觸發
+    await supabase
+      .from('user_reminders')
+      .update({ is_triggered: true })
+      .eq('id', reminder.id);
+
+    // 更新前端 state
+    setReminders(prev => prev.map(r => r.id === reminder.id ? { ...r, is_triggered: true } : r));
+
+    // 2. 執行提醒動作
+    setActiveAlarm(reminder);
+
+    if (reminder.reminder_type === 'audio' || reminder.reminder_type === 'both') {
+      if (audioRef.current) {
+        audioRef.current.play().catch(err => console.log("音訊播放受瀏覽器安全限制，需點擊觸發:", err));
+      }
+    }
+
+    // 震動回饋 (如果手機支援)
+    if (typeof window !== 'undefined' && window.navigator.vibrate) {
+      window.navigator.vibrate([500, 250, 500, 250, 500]);
+    }
+  };
+
+  // 停止鬧鐘
+  const handleStopAlarm = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+    setActiveAlarm(null);
+  };
+
+  // 獲取 reminders 列表
+  const fetchReminders = async (uid: string) => {
+    if (!uid || !isValidUUID(uid) || !supabase) return;
+    const { data, error } = await supabase
+      .from('user_reminders')
+      .select('*')
+      .eq('user_id', uid)
+      .eq('is_triggered', false)
+      .order('remind_at', { ascending: true });
+
+    if (!error && data) {
+      setReminders(data);
+    }
+  };
+
+  // 手動新增提醒事項
+  const handleAddReminder = async () => {
+    if (!newReminderTitle.trim() || !newReminderTime || !supabase || !isValidUUID(userId)) {
+      alert('請填寫完整提醒內容與時間！');
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('user_reminders')
+      .insert([{
+        user_id: userId,
+        title: newReminderTitle,
+        remind_at: new Date(newReminderTime).toISOString(),
+        reminder_type: newReminderType,
+        is_triggered: false
+      }])
+      .select();
+
+    if (!error && data) {
+      setReminders(prev => [...prev, data[0]].sort((a, b) => new Date(a.remind_at).getTime() - new Date(b.remind_at).getTime()));
+      setNewReminderTitle('');
+      setNewReminderTime('');
+      alert('鬧鐘/提醒設定成功！⏰');
+    } else {
+      alert('設定失敗，請確認格式');
+    }
+  };
+
+  // 刪除提醒事項
+  const handleDeleteReminder = async (id: string) => {
+    if (!supabase || !isValidUUID(userId)) return;
+    const { error } = await supabase
+      .from('user_reminders')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId);
+
+    if (!error) {
+      setReminders(prev => prev.filter(r => r.id !== id));
+    }
+  };
+
+  // 載入 Meta 與初始化
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -144,14 +291,12 @@ export default function Home() {
     });
   }, []);
 
-  // 🌟 初始化登入狀態與「無跳轉 Google GIS SDK」
   useEffect(() => {
     if (!supabase) {
       setAuthLoading(false);
       return;
     }
 
-    // 恢復已有 Session
     const restoreSession = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -159,6 +304,7 @@ export default function Home() {
           setUser(session.user);
           setUserId(session.user.id);
           fetchInstructions(session.user.id);
+          fetchReminders(session.user.id);
         }
       } catch (err) {
         console.error("Session 恢復失敗:", err);
@@ -169,21 +315,21 @@ export default function Home() {
 
     restoreSession();
 
-    // 監聽 Auth 變化
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
       if (event === 'SIGNED_IN' && currentSession?.user) {
         setUser(currentSession.user);
         setUserId(currentSession.user.id);
         fetchInstructions(currentSession.user.id);
+        fetchReminders(currentSession.user.id);
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setUserId('');
         setInstructions([]);
+        setReminders([]);
         setMessages([]);
       }
     });
 
-    // 載入字型設定
     const savedSize = localStorage.getItem('app_font_size') as 'small' | 'medium' | 'large';
     if (savedSize) {
       setFontSize(savedSize);
@@ -194,7 +340,6 @@ export default function Home() {
     };
   }, []);
 
-  // 🌟 載入並渲染「一鍵無跳轉 Google 登入按鈕」
   useEffect(() => {
     if (typeof window === 'undefined' || !supabase || user) return;
 
@@ -202,26 +347,26 @@ export default function Home() {
       if (!window.google) return;
       try {
         window.google.accounts.id.initialize({
-          client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '201360950604-12qii6qgfmg1b62kvpo5nb0khjljm7eh.apps.googleusercontent.com', // 請確保替換成您自己的 Web Client ID
+          client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '',
           callback: async (response: any) => {
             setAuthLoading(true);
             const { data, error } = await supabase.auth.signInWithIdToken({
               provider: 'google',
-              token: response.credential, // 獲取 JWT Token，直接在 PWA 內部登入，拒絕任何跳轉！
+              token: response.credential,
             });
             if (!error && data?.user) {
               setUser(data.user);
               setUserId(data.user.id);
               fetchInstructions(data.user.id);
+              fetchReminders(data.user.id);
             } else if (error) {
               alert(`Google 認證失敗: ${error.message}`);
             }
             setAuthLoading(false);
           },
-          ux_mode: 'popup', // 👈 關鍵：強制使用彈窗模式，絕不離開當前 PWA 頁面！
+          ux_mode: 'popup',
         });
 
-        // 渲染官方美化按鈕
         const btnContainer = document.getElementById('google-signin-btn');
         if (btnContainer) {
           window.google.accounts.id.renderButton(
@@ -316,6 +461,9 @@ export default function Home() {
       if (data.reply) {
         const replyId = `msg_model_${Date.now()}`;
         setMessages(prev => [...prev, { id: replyId, role: 'model', content: data.reply }]);
+        
+        // 🌟 核心關聯：若 AI 偵測到提醒設定成功並在回覆中通知，重新拉取最新提醒事項
+        fetchReminders(userId);
       }
     } catch (err) {
       console.error(err);
@@ -461,16 +609,8 @@ export default function Home() {
             </div>
             <h1 className="text-2xl font-extrabold text-white mb-2">專屬 AI 助理</h1>
             <p className="text-slate-400 text-sm mb-8 leading-relaxed">安全且無縫地同步您的大腦偏好設定</p>
-            
-            {/* 🌟 核心一鍵免帳密 Google 登入容器 */}
             <div className="flex flex-col items-center justify-center space-y-4">
               <div id="google-signin-btn" className="min-h-[50px]"></div>
-              
-              {!process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID && (
-                <p className="text-amber-400/80 text-xs px-2 leading-relaxed text-left">
-                  ⚠️ 系統提醒：請確認您已在專案的 <code>.env.local</code> 中配置 <code>NEXT_PUBLIC_GOOGLE_CLIENT_ID</code>，並已將其加到 Supabase 的 Authorized Client IDs，否則 Google 按鈕將無法渲染。
-                </p>
-              )}
             </div>
           </div>
         </div>
@@ -505,26 +645,13 @@ export default function Home() {
               </div>
             </div>
             
-            {/* 🌟 系統設定：徹底移除圓圈背景，換成 100% 齒輪形狀、高對比的 Heroicons Cog SVG */}
             <button 
               onClick={() => setShowSettingsModal(true)}
               className="text-white/80 hover:text-white active:scale-90 transition-all flex items-center justify-center bg-transparent border-0"
-              style={{ 
-                width: '40px', 
-                height: '40px', 
-                minWidth: '40px', 
-                minHeight: '40px', 
-                flexShrink: 0
-              }}
+              style={{ width: '40px', height: '40px', minWidth: '40px', minHeight: '40px', flexShrink: 0 }}
               title="系統設定"
             >
-              <svg 
-                xmlns="http://www.w3.org/2000/svg" 
-                viewBox="0 0 24 24" 
-                fill="currentColor" 
-                className="w-7 h-7"
-                style={{ width: '28px', height: '28px', display: 'block' }}
-              >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7" style={{ width: '28px', height: '28px', display: 'block' }}>
                 <path fillRule="evenodd" d="M11.078 2.25c-.288 0-.538.188-.612.466l-.5 1.865c-.172.643-.82 1.05-1.479.887l-1.865-.46a.625.625 0 00-.73.34l-.994 1.722a.625.625 0 00.16.782l1.503 1.155c.522.4.636 1.135.253 1.666l-.01.014c-.384.532-1.12.651-1.644.275l-1.502-1.155a.625.625 0 00-.782.16l-.994 1.722a.625.625 0 00.34.73l1.865.5c.643.172 1.05.82.887 1.479l-.46 1.865a.625.625 0 00.466.612h1.988c.288 0 .538-.188.612-.466l.5-1.865c.172-.643.82-1.05 1.479-.887l1.865.46c.264.066.545-.058.67-.297l.994-1.722a.625.625 0 00-.16-.782l-1.503-1.155c-.522-.4-.636-1.135-.253-1.666l.01-.014c.384-.532 1.12-.651 1.644-.275l1.502 1.155c.241.185.578.12.742-.11l.994-1.722a.625.625 0 00-.34-.73l-1.865-.5a1.25 1.25 0 01-.887-1.479l.46-1.865a.625.625 0 00-.466-.612h-1.988zM12 15a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
               </svg>
             </button>
@@ -581,6 +708,8 @@ export default function Home() {
                 </div>
               ))
             )}
+            {/* 🌟 隱藏定位點：確保每次訊息載入或更新時自動捲動置底 */}
+            <div ref={messagesEndRef} />
           </div>
 
           {/* 3. 底部輸入區 */}
@@ -604,6 +733,32 @@ export default function Home() {
         </>
       )}
 
+      {/* 🌟 全螢幕鬧鐘/提醒響起 Modal */}
+      {activeAlarm && (
+        <div className="fixed inset-0 bg-rose-950/95 backdrop-blur-xl flex flex-col items-center justify-center p-6 z-50 animate-pulse">
+          <div className="text-center max-w-md space-y-6">
+            <div className="w-24 h-24 rounded-full bg-rose-500/20 border-2 border-rose-400 flex items-center justify-center text-5xl mx-auto animate-bounce">
+              ⏰
+            </div>
+            <h2 className="text-3xl font-black text-rose-300">時間到了！提醒通知</h2>
+            <div className="bg-slate-900/80 border border-rose-500/30 p-6 rounded-2xl">
+              <p className="text-2xl font-bold text-white leading-relaxed break-words">
+                {activeAlarm.title}
+              </p>
+              <p className="text-sm text-slate-400 mt-2">
+                設定時間：{new Date(activeAlarm.remind_at).toLocaleTimeString()}
+              </p>
+            </div>
+            <button
+              onClick={handleStopAlarm}
+              className="w-full bg-rose-600 hover:bg-rose-500 text-white font-black text-xl py-4 rounded-full shadow-lg shadow-rose-600/30 transition-all active:scale-95"
+            >
+              🔕 關閉鬧鐘 / 停止提醒
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 設定 Modal */}
       {showSettingsModal && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 z-40">
@@ -623,6 +778,7 @@ export default function Home() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-8">
+              {/* 用戶資訊 */}
               <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-700/50 flex flex-col gap-3">
                 <div className="flex items-center gap-3">
                   {user?.user_metadata?.avatar_url ? (
@@ -645,13 +801,92 @@ export default function Home() {
                 </button>
               </div>
 
-              <div className="space-y-3">
+              {/* ⏰ 鬧鐘與日程提醒管理面板 */}
+              <div className="space-y-4">
+                <h4 className="text-base font-bold text-violet-400 flex items-center gap-1.5">
+                  ⏰ 管理我的鬧鐘與備忘提醒 ({reminders.length})
+                </h4>
+                
+                {/* 快速新增提醒表單 */}
+                <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 space-y-3">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">提醒內容/備忘標題</label>
+                    <input
+                      type="text"
+                      placeholder="例：下午3點出發去開會"
+                      value={newReminderTitle}
+                      onChange={(e) => setNewReminderTitle(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-violet-500"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">設定時間</label>
+                      <input
+                        type="datetime-local"
+                        value={newReminderTime}
+                        onChange={(e) => setNewReminderTime(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-violet-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">提醒模式</label>
+                      <select
+                        value={newReminderType}
+                        onChange={(e) => setNewReminderType(e.target.value as any)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-violet-500"
+                      >
+                        <option value="both">🔔 視窗+鬧鐘</option>
+                        <option value="alert">💬 僅彈出視窗</option>
+                        <option value="audio">🎵 僅播放鬧鐘</option>
+                      </select>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleAddReminder}
+                    className="w-full bg-violet-600 hover:bg-violet-500 text-white py-2 rounded-lg font-bold text-sm transition-all"
+                  >
+                    ➕ 儲存提醒與鬧鐘
+                  </button>
+                </div>
+
+                {/* 現有提醒清單 */}
+                <div className="space-y-2 max-h-[25vh] overflow-y-auto pr-1">
+                  {reminders.length === 0 ? (
+                    <p className="text-slate-500 text-xs py-2 text-center">目前無待觸發的提醒日程。</p>
+                  ) : (
+                    reminders.map((r) => (
+                      <div key={r.id} className="bg-slate-900/30 border border-slate-700/60 rounded-xl p-3 flex justify-between items-center gap-2">
+                        <div className="min-w-0">
+                          <p className="text-slate-200 text-sm font-bold truncate">{r.title}</p>
+                          <p className="text-slate-400 text-xs mt-1">
+                            ⏰ {new Date(r.remind_at).toLocaleString()} 
+                            <span className="ml-2 text-violet-400 text-[10px] bg-violet-500/10 px-1.5 py-0.5 rounded">
+                              {r.reminder_type === 'both' ? '視窗+鬧鐘' : r.reminder_type === 'alert' ? '僅視窗' : '僅鬧鐘'}
+                            </span>
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteReminder(r.id)}
+                          className="text-rose-400 hover:text-rose-300 p-1 flex-shrink-0"
+                          title="取消提醒"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* 大腦規則管理 */}
+              <div className="space-y-3 pt-4 border-t border-slate-700/50">
                 <h4 className="text-base font-bold text-slate-300 flex items-center gap-1.5">
                   🧠 編輯大腦指導偏好 ({instructions.length})
                 </h4>
-                <div className="space-y-3 max-h-[30vh] overflow-y-auto pr-1">
+                <div className="space-y-3 max-h-[20vh] overflow-y-auto pr-1">
                   {instructions.length === 0 ? (
-                    <p className="text-slate-500 text-sm py-4 text-center">尚無大腦規則。在對話中點擊 👍 / 👎 將自動產生規則！</p>
+                    <p className="text-slate-500 text-sm py-4 text-center">尚無大腦規則。</p>
                   ) : (
                     instructions.map((inst) => (
                       <div key={inst.id} className="bg-slate-900/40 border border-slate-700/80 rounded-xl p-3 flex flex-col gap-2">
@@ -660,40 +895,20 @@ export default function Home() {
                             <textarea
                               value={editingText}
                               onChange={(e) => setEditingText(e.target.value)}
-                              className="w-full bg-slate-950 border border-violet-500/50 rounded-lg p-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-violet-500/50 resize-none"
+                              className="w-full bg-slate-950 border border-violet-500/50 rounded-lg p-2 text-white text-sm focus:outline-none resize-none"
                               rows={3}
                             />
                             <div className="flex justify-end gap-2 text-xs">
-                              <button 
-                                onClick={() => setEditingInstructionId(null)}
-                                className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-md font-medium"
-                              >
-                                取消
-                              </button>
-                              <button 
-                                onClick={() => handleSaveInstruction(inst.id)}
-                                className="bg-violet-600 hover:bg-violet-500 text-white px-3 py-1.5 rounded-md font-semibold"
-                              >
-                                儲存修改
-                              </button>
+                              <button onClick={() => setEditingInstructionId(null)} className="bg-slate-700 text-slate-300 px-3 py-1.5 rounded-md">取消</button>
+                              <button onClick={() => handleSaveInstruction(inst.id)} className="bg-violet-600 text-white px-3 py-1.5 rounded-md">儲存</button>
                             </div>
                           </div>
                         ) : (
                           <>
                             <p className="text-slate-300 text-sm whitespace-pre-wrap leading-relaxed">{inst.instruction}</p>
                             <div className="flex justify-end gap-3 text-xs border-t border-slate-800/60 pt-2 text-slate-400">
-                              <button 
-                                onClick={() => handleEditClick(inst.id, inst.instruction)}
-                                className="hover:text-violet-400 flex items-center gap-0.5"
-                              >
-                                📝 編輯
-                              </button>
-                              <button 
-                                onClick={() => handleDeleteInstruction(inst.id)}
-                                className="hover:text-rose-400 flex items-center gap-0.5"
-                              >
-                                🗑️ 刪除
-                              </button>
+                              <button onClick={() => handleEditClick(inst.id, inst.instruction)} className="hover:text-violet-400">📝 編輯</button>
+                              <button onClick={() => handleDeleteInstruction(inst.id)} className="hover:text-rose-400">🗑️ 刪除</button>
                             </div>
                           </>
                         )}
@@ -708,7 +923,7 @@ export default function Home() {
                   onClick={() => setShowResetModal(true)}
                   className="w-full bg-amber-600/10 hover:bg-amber-600/20 border border-amber-500/30 text-amber-300 font-semibold py-3 rounded-lg active:scale-98 transition-all text-sm"
                 >
-                  🗑️ 清空對話（保留大腦規則）
+                  🗑️ 清空對話（保留大腦與提醒）
                 </button>
               </div>
             </div>
@@ -730,20 +945,10 @@ export default function Home() {
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
             <h3 className={`${currentStyle.modalTitle} text-white mb-3`}>系統提示</h3>
-            <p className={`${currentStyle.modalText} text-slate-300 mb-6`}>是否要清除該使用者的所有對話記憶？（不會影響大腦規則喔！）</p>
+            <p className={`${currentStyle.modalText} text-slate-300 mb-6`}>是否要清除該使用者的所有對話記憶？</p>
             <div className="flex space-x-3 justify-center">
-              <button 
-                onClick={() => setShowResetModal(false)}
-                className={`bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-full font-semibold ${currentStyle.modalBtn}`}
-              >
-                取消
-              </button>
-              <button 
-                onClick={confirmResetHistory}
-                className={`bg-rose-600 hover:bg-rose-500 text-white rounded-full font-bold ${currentStyle.modalBtn}`}
-              >
-                確認清除
-              </button>
+              <button onClick={() => setShowResetModal(false)} className={`bg-slate-700 text-slate-200 rounded-full font-semibold ${currentStyle.modalBtn}`}>取消</button>
+              <button onClick={confirmResetHistory} className={`bg-rose-600 text-white rounded-full font-bold ${currentStyle.modalBtn}`}>確認清除</button>
             </div>
           </div>
         </div>
@@ -754,8 +959,7 @@ export default function Home() {
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
             <h3 className={`${currentStyle.modalTitle} text-rose-400 mb-2`}>幫助助理改進</h3>
-            <p className="text-slate-400 text-sm mb-4">這段回覆哪裡不對呢？（例如：語氣太冷淡、請回答得更簡短...）</p>
-            
+            <p className="text-slate-400 text-sm mb-4">這段回覆哪裡不對呢？</p>
             <textarea
               value={dislikeCorrection}
               onChange={(e) => setDislikeCorrection(e.target.value)}
@@ -763,20 +967,9 @@ export default function Home() {
               rows={3}
               className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-base focus:outline-none focus:border-violet-500 mb-5 resize-none"
             />
-            
             <div className="flex space-x-3 justify-center">
-              <button 
-                onClick={() => setShowDislikeModal(false)}
-                className={`bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-full font-semibold ${currentStyle.modalBtn}`}
-              >
-                取消
-              </button>
-              <button 
-                onClick={confirmDislikeFeedback}
-                className={`bg-rose-600 hover:bg-rose-500 text-white rounded-full font-bold ${currentStyle.modalBtn}`}
-              >
-                送出修正
-              </button>
+              <button onClick={() => setShowDislikeModal(false)} className={`bg-slate-700 text-slate-200 rounded-full font-semibold ${currentStyle.modalBtn}`}>取消</button>
+              <button onClick={confirmDislikeFeedback} className={`bg-rose-600 text-white rounded-full font-bold ${currentStyle.modalBtn}`}>送出修正</button>
             </div>
           </div>
         </div>
