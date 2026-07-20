@@ -144,7 +144,7 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
 5.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！`;
 
     // 4. 定義優先使用與備援的模型清單
-    const candidateModels = ['gemini-2.0-flash', 'gemini-1.5-flash'];
+    const candidateModels = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
     let result: any = null;
     let responseText = '';
 
