@@ -9,7 +9,6 @@ declare global {
   }
 }
 
-
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
@@ -65,7 +64,7 @@ const isValidUUID = (id: string) => {
   return uuidRegex.test(id);
 };
 
-// 🔊 系統內建電子鬧鐘嗶嗶聲 (Base64 音訊)，免去外部載入失敗的問題
+// 🔊 系統內建電子鬧鐘嗶嗶聲
 const BEEP_AUDIO_BASE64 = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==";
 
 export default function Home() {
@@ -82,6 +81,7 @@ export default function Home() {
 
   // Modals 控制
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showReminderModal, setShowReminderModal] = useState(false); // 🌟 1. 獨立提醒 Modal
   const [showResetModal, setShowResetModal] = useState(false);
   const [showDislikeModal, setShowDislikeModal] = useState(false);
   
@@ -93,15 +93,17 @@ export default function Home() {
   const [editingInstructionId, setEditingInstructionId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
 
-  // ⏰ 新增：提醒與鬧鐘狀態
+  // ⏰ 提醒與鬧鐘狀態
   const [reminders, setReminders] = useState<any[]>([]);
   const [newReminderTitle, setNewReminderTitle] = useState('');
   const [newReminderTime, setNewReminderTime] = useState('');
+  const [newReminderRepeat, setNewReminderRepeat] = useState<'none' | 'daily' | 'weekly' | 'monthly'>('none'); // 🌟 2. 週期性提醒
   const [newReminderType, setNewReminderType] = useState<'alert' | 'audio' | 'both'>('both');
-  const [activeAlarm, setActiveAlarm] = useState<any | null>(null); // 當前正在響的鬧鐘
+  const [activeAlarm, setActiveAlarm] = useState<any | null>(null);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
   
   // Refs
-  const messagesEndRef = useRef<HTMLDivElement | null>(null); // 🌟 用於自動往下滾動的 Ref
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const sizeStyles = {
@@ -136,73 +138,146 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 🌟 核心功能一：自動滾動到底部
+  // 自動捲動置底
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]); // 當訊息陣列有任何變化，立刻觸發置底
+  }, [messages]);
 
-  // 初始化音效
+  // 註冊 Service Worker 與音效初始化
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const audio = new Audio(BEEP_AUDIO_BASE64);
       audio.loop = true;
       audioRef.current = audio;
+
+      if ('Notification' in window) {
+        setNotificationPermission(Notification.permission);
+      }
+
+      // 🌟 3. 註冊 Service Worker 實現背景推播
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(err => console.error("SW 註冊失敗:", err));
+      }
     }
   }, []);
 
-  // 🌟 核心功能二：鬧鐘/提醒輪詢器 (每秒比對時間)
-  useEffect(() => {
+  // 請求 Notification 權限
+  const requestNotificationPermission = async () => {
+    if ('Notification' in window) {
+      const perm = await Notification.requestPermission();
+      setNotificationPermission(perm);
+      if (perm === 'granted') {
+        alert('推播通知權限已開啟！鬧鐘可在背景提醒您。');
+      }
+    }
+  };
+
+  // 🌟 核心：鬧鐘/提醒觸發邏輯（支援週期計算與背景推播）
+  const checkAndTriggerReminders = async () => {
     if (!userId || reminders.length === 0) return;
 
-    const interval = setInterval(() => {
-      const now = new Date();
-      reminders.forEach(async (reminder) => {
-        if (reminder.is_triggered) return;
-        
-        const remindTime = new Date(reminder.remind_at);
-        // 當前時間大於等於設定提醒時間
-        if (now >= remindTime) {
-          // 標記為已觸發，防止重複響起
-          reminder.is_triggered = true;
-          triggerReminder(reminder);
-        }
-      });
-    }, 1000);
+    const now = new Date();
+    for (const reminder of reminders) {
+      if (reminder.is_triggered) continue;
 
-    return () => clearInterval(interval);
-  }, [reminders, userId]);
+      const remindTime = new Date(reminder.remind_at);
+      if (now >= remindTime) {
+        // 觸發提醒
+        await processTriggeredReminder(reminder);
+      }
+    }
+  };
 
-  // 觸發提醒事件
-  const triggerReminder = async (reminder: any) => {
+  // 處理已觸發提醒 (算下一次週期時間)
+  const processTriggeredReminder = async (reminder: any) => {
     if (!supabase || !isValidUUID(userId)) return;
 
-    // 1. 更新資料庫狀態為已觸發
-    await supabase
-      .from('user_reminders')
-      .update({ is_triggered: true })
-      .eq('id', reminder.id);
+    const repeatType = reminder.repeat_type || 'none';
+    let nextRemindAt: string | null = null;
 
-    // 更新前端 state
-    setReminders(prev => prev.map(r => r.id === reminder.id ? { ...r, is_triggered: true } : r));
+    if (repeatType !== 'none') {
+      const current = new Date(reminder.remind_at);
+      if (repeatType === 'daily') {
+        current.setDate(current.getDate() + 1);
+      } else if (repeatType === 'weekly') {
+        current.setDate(current.getDate() + 7);
+      } else if (repeatType === 'monthly') {
+        current.setMonth(current.getMonth() + 1);
+      }
+      nextRemindAt = current.toISOString();
+    }
 
-    // 2. 執行提醒動作
+    // 更新資料庫
+    if (nextRemindAt) {
+      // 週期提醒：不設為 is_triggered，更新為下一個時間
+      await supabase
+        .from('user_reminders')
+        .update({ remind_at: nextRemindAt, is_triggered: false })
+        .eq('id', reminder.id);
+    } else {
+      // 單次提醒：標記為已觸發
+      await supabase
+        .from('user_reminders')
+        .update({ is_triggered: true })
+        .eq('id', reminder.id);
+    }
+
+    // 重新載入提醒
+    fetchReminders(userId);
+
+    // 執行前端視覺/聽覺提醒
     setActiveAlarm(reminder);
 
     if (reminder.reminder_type === 'audio' || reminder.reminder_type === 'both') {
       if (audioRef.current) {
-        audioRef.current.play().catch(err => console.log("音訊播放受瀏覽器安全限制，需點擊觸發:", err));
+        audioRef.current.play().catch(err => console.log("音訊播放受限:", err));
       }
     }
 
-    // 震動回饋 (如果手機支援)
+    // 🌟 背景系統層級推播 (Service Worker / Notification)
+    if (Notification.permission === 'granted') {
+      if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+        navigator.serviceWorker.ready.then(reg => {
+          reg.showNotification(`⏰ 提醒：${reminder.title}`, {
+            body: `預定時間：${new Date(reminder.remind_at).toLocaleTimeString()}`,
+            icon: '/icon-192.png',
+            tag: reminder.id
+          });
+        });
+      } else {
+        new Notification(`⏰ 提醒：${reminder.title}`, {
+          body: `預定時間：${new Date(reminder.remind_at).toLocaleTimeString()}`
+        });
+      }
+    }
+
+    // 震動回饋
     if (typeof window !== 'undefined' && window.navigator.vibrate) {
       window.navigator.vibrate([500, 250, 500, 250, 500]);
     }
   };
+
+  // 每秒檢查 + 🌟 畫面喚醒 (visibilitychange) 自動檢測
+  useEffect(() => {
+    const interval = setInterval(checkAndTriggerReminders, 1000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkAndTriggerReminders(); // 畫面喚醒時秒速檢測
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [reminders, userId]);
 
   // 停止鬧鐘
   const handleStopAlarm = () => {
@@ -241,6 +316,7 @@ export default function Home() {
         user_id: userId,
         title: newReminderTitle,
         remind_at: new Date(newReminderTime).toISOString(),
+        repeat_type: newReminderRepeat,
         reminder_type: newReminderType,
         is_triggered: false
       }])
@@ -250,6 +326,7 @@ export default function Home() {
       setReminders(prev => [...prev, data[0]].sort((a, b) => new Date(a.remind_at).getTime() - new Date(b.remind_at).getTime()));
       setNewReminderTitle('');
       setNewReminderTime('');
+      setNewReminderRepeat('none');
       alert('鬧鐘/提醒設定成功！⏰');
     } else {
       alert('設定失敗，請確認格式');
@@ -270,7 +347,7 @@ export default function Home() {
     }
   };
 
-  // 載入 Meta 與初始化
+  // PWA Meta 設定與初始化 Auth
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -463,7 +540,7 @@ export default function Home() {
         const replyId = `msg_model_${Date.now()}`;
         setMessages(prev => [...prev, { id: replyId, role: 'model', content: data.reply }]);
         
-        // 🌟 核心關聯：若 AI 偵測到提醒設定成功並在回覆中通知，重新拉取最新提醒事項
+        // 🌟 重新拉取最新提醒事項 (若 AI 幫忙設定了鬧鐘)
         fetchReminders(userId);
       }
     } catch (err) {
@@ -653,7 +730,7 @@ export default function Home() {
               title="系統設定"
             >
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7" style={{ width: '28px', height: '28px', display: 'block' }}>
-                <path fillRule="evenodd" d="M11.078 2.25c-.288 0-.538.188-.612.466l-.5 1.865c-.172.643-.82 1.05-1.479.887l-1.865-.46a.625.625 0 00-.73.34l-.994 1.722a.625.625 0 00.16.782l1.503 1.155c.522.4.636 1.135.253 1.666l-.01.014c-.384.532-1.12.651-1.644.275l-1.502-1.155a.625.625 0 00-.782.16l-.994 1.722a.625.625 0 00.34.73l1.865.5c.643.172 1.05.82.887 1.479l-.46 1.865a.625.625 0 00.466.612h1.988c.288 0 .538-.188.612-.466l.5-1.865c.172-.643.82-1.05 1.479-.887l1.865.46c.264.066.545-.058.67-.297l.994-1.722a.625.625 0 00-.16-.782l-1.503-1.155c-.522-.4-.636-1.135-.253-1.666l.01-.014c.384-.532 1.12-.651 1.644-.275l1.502 1.155c.241.185.578.12.742-.11l.994-1.722a.625.625 0 00-.34-.73l-1.865-.5a1.25 1.25 0 01-.887-1.479l.46-1.865a.625.625 0 00-.466-.612h-1.988zM12 15a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+                <path fillRule="evenodd" d="M11.078 2.25c-.288 0-.538.188-.612.466l-.5 1.865c-.172.643-.82 1.05-1.479.887l-1.865-.46a.625.625 0 00-.73.34l-.994 1.722a.625.625 0 00.16.782l1.503 1.155c.522.4.636 1.135.253 1.666l-.01.014c-.384.532-1.12.651-1.644.275l-1.502-1.155a.625.625 0 00-.782.16l-.994 1.722a.625.625 0 00.34.73l1.865.5c.643.172 1.05.82.887 1.479l-.46 1.865a.625.625 0 00.466.612h1.988c.288 0 .538-.188.612-.466l.5-1.865c.172-.643.82-1.05 1.479-.887l1.865.46c.264.066.545-.058.67-.297l.994-1.722a.625.625 0 00-.16-.782l-1.503-1.155c-.522-.4-.636-1.135-.253-1.666l.01-.014c.384-.532-1.12-.651 1.644-.275l1.502 1.155c.241.185.578.12.742-.11l.994-1.722a.625.625 0 00-.34-.73l-1.865-.5a1.25 1.25 0 01-.887-1.479l.46-1.865a.625.625 0 00-.466-.612h-1.988zM12 15a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
               </svg>
             </button>
           </header>
@@ -709,7 +786,6 @@ export default function Home() {
                 </div>
               ))
             )}
-            {/* 🌟 隱藏定位點：確保每次訊息載入或更新時自動捲動置底 */}
             <div ref={messagesEndRef} />
           </div>
 
@@ -734,7 +810,7 @@ export default function Home() {
         </>
       )}
 
-      {/* 🌟 全螢幕鬧鐘/提醒響起 Modal */}
+      {/* 🌟 全螢幕鬧鐘響起 Modal */}
       {activeAlarm && (
         <div className="fixed inset-0 bg-rose-950/95 backdrop-blur-xl flex flex-col items-center justify-center p-6 z-50 animate-pulse">
           <div className="text-center max-w-md space-y-6">
@@ -748,6 +824,9 @@ export default function Home() {
               </p>
               <p className="text-sm text-slate-400 mt-2">
                 設定時間：{new Date(activeAlarm.remind_at).toLocaleTimeString()}
+                {activeAlarm.repeat_type !== 'none' && (
+                  <span className="ml-2 text-rose-300">({activeAlarm.repeat_type === 'daily' ? '每天' : activeAlarm.repeat_type === 'weekly' ? '每週' : '每月'}週期)</span>
+                )}
               </p>
             </div>
             <button
@@ -760,7 +839,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* 設定 Modal */}
+      {/* 主設定 Modal */}
       {showSettingsModal && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 z-40">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
@@ -778,7 +857,7 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-8">
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
               {/* 用戶資訊 */}
               <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-700/50 flex flex-col gap-3">
                 <div className="flex items-center gap-3">
@@ -802,82 +881,25 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* ⏰ 鬧鐘與日程提醒管理面板 */}
-              <div className="space-y-4">
-                <h4 className="text-base font-bold text-violet-400 flex items-center gap-1.5">
-                  ⏰ 管理我的鬧鐘與備忘提醒 ({reminders.length})
-                </h4>
-                
-                {/* 快速新增提醒表單 */}
-                <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 space-y-3">
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">提醒內容/備忘標題</label>
-                    <input
-                      type="text"
-                      placeholder="例：下午3點出發去開會"
-                      value={newReminderTitle}
-                      onChange={(e) => setNewReminderTitle(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-violet-500"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs text-slate-400 mb-1">設定時間</label>
-                      <input
-                        type="datetime-local"
-                        value={newReminderTime}
-                        onChange={(e) => setNewReminderTime(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-violet-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-slate-400 mb-1">提醒模式</label>
-                      <select
-                        value={newReminderType}
-                        onChange={(e) => setNewReminderType(e.target.value as any)}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-violet-500"
-                      >
-                        <option value="both">🔔 視窗+鬧鐘</option>
-                        <option value="alert">💬 僅彈出視窗</option>
-                        <option value="audio">🎵 僅播放鬧鐘</option>
-                      </select>
-                    </div>
-                  </div>
-                  <button
-                    onClick={handleAddReminder}
-                    className="w-full bg-violet-600 hover:bg-violet-500 text-white py-2 rounded-lg font-bold text-sm transition-all"
-                  >
-                    ➕ 儲存提醒與鬧鐘
-                  </button>
-                </div>
-
-                {/* 現有提醒清單 */}
-                <div className="space-y-2 max-h-[25vh] overflow-y-auto pr-1">
-                  {reminders.length === 0 ? (
-                    <p className="text-slate-500 text-xs py-2 text-center">目前無待觸發的提醒日程。</p>
-                  ) : (
-                    reminders.map((r) => (
-                      <div key={r.id} className="bg-slate-900/30 border border-slate-700/60 rounded-xl p-3 flex justify-between items-center gap-2">
-                        <div className="min-w-0">
-                          <p className="text-slate-200 text-sm font-bold truncate">{r.title}</p>
-                          <p className="text-slate-400 text-xs mt-1">
-                            ⏰ {new Date(r.remind_at).toLocaleString()} 
-                            <span className="ml-2 text-violet-400 text-[10px] bg-violet-500/10 px-1.5 py-0.5 rounded">
-                              {r.reminder_type === 'both' ? '視窗+鬧鐘' : r.reminder_type === 'alert' ? '僅視窗' : '僅鬧鐘'}
-                            </span>
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => handleDeleteReminder(r.id)}
-                          className="text-rose-400 hover:text-rose-300 p-1 flex-shrink-0"
-                          title="取消提醒"
-                        >
-                          🗑️
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
+              {/* 🌟 1. 獨立按鈕：跳出獨立提醒 Modal */}
+              <div className="pt-2">
+                <button
+                  onClick={() => {
+                    setShowSettingsModal(false);
+                    setShowReminderModal(true);
+                  }}
+                  className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg flex items-center justify-between transition-all active:scale-98"
+                >
+                  <span className="flex items-center gap-2 text-base">
+                    ⏰ 提醒與鬧鐘設定
+                    {reminders.length > 0 && (
+                      <span className="bg-rose-500 text-white text-xs px-2 py-0.5 rounded-full font-black">
+                        {reminders.length}
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-violet-200 text-xl">➔</span>
+                </button>
               </div>
 
               {/* 大腦規則管理 */}
@@ -885,7 +907,7 @@ export default function Home() {
                 <h4 className="text-base font-bold text-slate-300 flex items-center gap-1.5">
                   🧠 編輯大腦指導偏好 ({instructions.length})
                 </h4>
-                <div className="space-y-3 max-h-[20vh] overflow-y-auto pr-1">
+                <div className="space-y-3 max-h-[25vh] overflow-y-auto pr-1">
                   {instructions.length === 0 ? (
                     <p className="text-slate-500 text-sm py-4 text-center">尚無大腦規則。</p>
                   ) : (
@@ -941,7 +963,149 @@ export default function Home() {
         </div>
       )}
 
-      {/* 彈窗 A：清空確認 */}
+      {/* 🌟 1 & 2. 獨立跳出的「提醒與鬧鐘設定 Modal」 */}
+      {showReminderModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-40">
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
+            <div className="flex-shrink-0 p-5 border-b border-slate-700 flex justify-between items-center bg-slate-800/50">
+              <h3 className="text-xl font-bold text-violet-400 flex items-center gap-2">
+                ⏰ 鬧鐘與日程提醒設定
+              </h3>
+              <button 
+                onClick={() => setShowReminderModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-full bg-slate-700/50"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* 🌟 背景推播權限開啟引導 */}
+              {notificationPermission !== 'granted' && (
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 flex items-center justify-between gap-2">
+                  <p className="text-xs text-amber-200">開啟手機背景推播權限，螢幕休眠時也能收到提醒！</p>
+                  <button
+                    onClick={requestNotificationPermission}
+                    className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs px-3 py-1.5 rounded-lg flex-shrink-0"
+                  >
+                    開啟推播
+                  </button>
+                </div>
+              )}
+
+              {/* 新增提醒表單 */}
+              <div className="bg-slate-900/60 border border-slate-700/60 rounded-xl p-4 space-y-3">
+                <h4 className="text-sm font-bold text-slate-200">➕ 新增提醒 / 鬧鐘</h4>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">提醒內容/備忘標題</label>
+                  <input
+                    type="text"
+                    placeholder="例如：下午3點出發去開會"
+                    value={newReminderTitle}
+                    onChange={(e) => setNewReminderTitle(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-violet-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">設定時間</label>
+                    <input
+                      type="datetime-local"
+                      value={newReminderTime}
+                      onChange={(e) => setNewReminderTime(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-violet-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">週期重複 (🌟)</label>
+                    <select
+                      value={newReminderRepeat}
+                      onChange={(e) => setNewReminderRepeat(e.target.value as any)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-violet-500"
+                    >
+                      <option value="none">單次 (不重複)</option>
+                      <option value="daily">🔄 每天重複</option>
+                      <option value="weekly">📅 每週重複</option>
+                      <option value="monthly">📆 每月重複</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">提醒模式</label>
+                  <select
+                    value={newReminderType}
+                    onChange={(e) => setNewReminderType(e.target.value as any)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-violet-500"
+                  >
+                    <option value="both">🔔 視窗 + 鬧鐘音效</option>
+                    <option value="alert">💬 僅彈出視窗</option>
+                    <option value="audio">🎵 僅播放鬧鐘</option>
+                  </select>
+                </div>
+
+                <button
+                  onClick={handleAddReminder}
+                  className="w-full bg-violet-600 hover:bg-violet-500 text-white py-2.5 rounded-lg font-bold text-sm transition-all shadow-md active:scale-98 mt-2"
+                >
+                  新增提醒事項
+                </button>
+              </div>
+
+              {/* 提醒清單 */}
+              <div className="space-y-3">
+                <h4 className="text-sm font-bold text-slate-300">
+                  📋 待觸發提醒與鬧鐘 ({reminders.length})
+                </h4>
+                <div className="space-y-2 max-h-[30vh] overflow-y-auto pr-1">
+                  {reminders.length === 0 ? (
+                    <p className="text-slate-500 text-xs py-4 text-center">目前沒有設定任何待觸發的提醒。</p>
+                  ) : (
+                    reminders.map((r) => (
+                      <div key={r.id} className="bg-slate-900/40 border border-slate-700/60 rounded-xl p-3.5 flex justify-between items-center gap-2">
+                        <div className="min-w-0">
+                          <p className="text-slate-100 text-sm font-bold truncate">{r.title}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-slate-400 text-xs">
+                              ⏰ {new Date(r.remind_at).toLocaleString()}
+                            </span>
+                            {r.repeat_type !== 'none' && (
+                              <span className="bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] px-2 py-0.5 rounded-full font-semibold">
+                                🔄 {r.repeat_type === 'daily' ? '每天' : r.repeat_type === 'weekly' ? '每週' : '每月'}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteReminder(r.id)}
+                          className="text-rose-400 hover:text-rose-300 p-1.5 flex-shrink-0"
+                          title="刪除提醒"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-shrink-0 p-4 border-t border-slate-700 bg-slate-900/20 flex justify-end">
+              <button 
+                onClick={() => setShowReminderModal(false)}
+                className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-2 rounded-full font-bold text-sm transition-all"
+              >
+                關閉
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 清空確認 Modal */}
       {showResetModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
@@ -955,7 +1119,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* 彈窗 B：不滿意 (Dislike) 反饋彈窗 */}
+      {/* 不滿意反饋 Modal */}
       {showDislikeModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
