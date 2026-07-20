@@ -65,45 +65,40 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
-// 🌟 強制背景推播：手機鎖屏/App關閉時由系統喚醒並彈出鬧鐘
+// 🌟 強制背景推播接收器 (手機螢幕鎖定/App關閉時也會強制觸發)
 self.addEventListener('push', (event) => {
-  if (!event.data) return;
-
-  try {
-    const data = event.data.json();
-    const title = data.title || '⏰ 鬧鐘提醒';
-    const options = {
-      body: data.body || '您的提醒時間到了！',
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
-      vibrate: [500, 250, 500, 250, 500, 250, 500],
-      tag: data.id || 'alarm-notification',
-      renotify: true,
-      requireInteraction: true, // 強制保持在螢幕上，使用者不點擊不消失
-      data: data
-    };
-
-    event.waitUntil(
-      self.registration.showNotification(title, options)
-    );
-  } catch (err) {
-    console.error("Push 事件處理失敗:", err);
+  let data = { title: '⏰ 提醒通知', body: '您的提醒時間到了！' };
+  
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch (e) {
+      data.body = event.data.text();
+    }
   }
+
+  const options = {
+    body: data.body,
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    vibrate: [500, 250, 500, 250, 500], // 強制震動節奏
+    tag: data.tag || 'reminder-tag',
+    renotify: true,
+    data: { url: '/' }
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, options)
+  );
 });
 
-// 點擊推播開啟 App
+// 點擊通知開啟 App
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       if (clientList.length > 0) {
-        let client = clientList[0];
-        for (let i = 0; i < clientList.length; i++) {
-          if (clientList[i].focused) {
-            return clientList[i];
-          }
-        }
-        return client.focus();
+        return clientList[0].focus();
       }
       return clients.openWindow('/');
     })
