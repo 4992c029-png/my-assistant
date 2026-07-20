@@ -2,15 +2,17 @@ import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI, FunctionDeclaration, Type, Tool } from '@google/generative-ai';
 import { createClient } from '@supabase/supabase-js';
 
+// 初始化 Supabase Client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// 初始化 Google Generative AI
 const apiKey = process.env.GEMINI_API_KEY || '';
 const genAI = new GoogleGenerativeAI(apiKey);
 
-// 🛠️ 顯式標註 FunctionDeclaration[] 型別，解決 TypeScript 編譯錯誤
+// 🛠️ 明確標註 FunctionDeclaration[] 型別，避免 TypeScript 編譯報錯
 const functionDeclarations: FunctionDeclaration[] = [
   {
     name: 'set_reminder',
@@ -54,7 +56,7 @@ const functionDeclarations: FunctionDeclaration[] = [
   },
 ];
 
-// 🛠️ 顯式標註 Tool[] 型別
+// 🛠️ 明確標註 Tool[] 型別
 const tools: Tool[] = [{ functionDeclarations }];
 
 export async function POST(req: Request) {
@@ -73,7 +75,7 @@ export async function POST(req: Request) {
 
     const userRules = instructionsData?.map((item) => item.instruction).join('\n') || '';
 
-    // 2. 讀取歷史對話紀錄
+    // 2. 讀取歷史對話紀錄 (最多 20 條)
     const { data: historyData } = await supabase
       .from('chat_history')
       .select('role, content')
@@ -87,13 +89,12 @@ export async function POST(req: Request) {
         parts: [{ text: item.content }],
       })) || [];
 
-    // 3. 設定系統 Prompt (System Instruction)
+    // 3. 設定系統 Prompt
     const systemInstruction = `你是一位貼心且專業的個人 AI 助理。
 當前系統 UTC 時間為：${new Date().toISOString()}。
 
 使用者設定的個人習慣與大腦規則：
-${userRules ? userRules : '目前尚無特殊偏好設定。'}
-
+${userPreferences}
 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
 
 【Execution Rules 防止幻覺硬性規定】
@@ -104,7 +105,7 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
 2. 當使用者明確要求「記住...」、「以後請...」時，請主動呼叫 save_instruction 工具。
 3. 保持親切、簡潔且具效益的回答。`;
 
-    // 4. 初始化 Gemini 模型 (帶入 tools 參數)
+    // 4. 初始化 Gemini 模型
     const model = genAI.getGenerativeModel({
       model: 'gemini-1.5-flash',
       systemInstruction: systemInstruction,
@@ -120,7 +121,7 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
     let response = await result.response;
     let responseText = response.text();
 
-    // 6. 處理 Function Calling (自動觸發寫入 Supabase)
+    // 6. 處理 Function Calling
     const functionCalls = response.functionCalls();
 
     if (functionCalls && functionCalls.length > 0) {
@@ -172,7 +173,7 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
       }
     }
 
-    // 7. 將本次對話寫入歷史紀錄
+    // 7. 將本次對話紀錄存入 Supabase
     await supabase.from('chat_history').insert([
       { user_id: userId, role: 'user', content: message },
       { user_id: userId, role: 'model', content: responseText },
