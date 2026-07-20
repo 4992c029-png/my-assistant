@@ -56,40 +56,30 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-//  提醒事項
-self.addEventListener('push', function (event) {
-  if (!event.data) return;
-  
-  const data = event.data.json();
-  const title = data.title || '⏰ 時間到了！';
-  const options = {
-    body: data.body || '您有一個備忘提醒事項。',
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
-    vibrate: [500, 250, 500, 250, 500],
-    data: { url: '/' },
-    actions: [
-      { action: 'open', title: '查看詳情' }
-    ]
-  };
-
-  event.waitUntil(
-    self.registration.showNotification(title, options)
-  );
+// 提醒事項
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
 });
 
-self.addEventListener('notificationclick', function (event) {
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
+// 監聽背景推播通知點擊
+self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(
-    clients.matchAll({ type: 'window' }).then(windowClients => {
-      for (let client of windowClients) {
-        if (client.url === '/' && 'focus' in client) {
-          return client.focus();
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      if (clientList.length > 0) {
+        let client = clientList[0];
+        for (let i = 0; i < clientList.length; i++) {
+          if (clientList[i].focused) {
+            return clientList[i];
+          }
         }
+        return client.focus();
       }
-      if (clients.openWindow) {
-        return clients.openWindow('/');
-      }
+      return clients.openWindow('/');
     })
   );
 });
