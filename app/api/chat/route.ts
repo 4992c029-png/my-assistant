@@ -7,7 +7,7 @@ import {
 } from '@google/generative-ai';
 import { createClient } from '@supabase/supabase-js';
 
-// 🛠️ 將 SchemaType 映射為 Type，維持 Type.OBJECT 與 Type.STRING 的寫法
+// 🛠️ 將 SchemaType 映射為 Type
 const Type = SchemaType;
 
 // 初始化 Supabase Client
@@ -15,10 +15,6 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
-
-// 初始化 Google Generative AI
-const apiKey = process.env.GEMINI_API_KEY || '';
-const genAI = new GoogleGenerativeAI(apiKey);
 
 // 🛠️ Function Calling 工具定義
 const functionDeclarations: FunctionDeclaration[] = [
@@ -66,13 +62,50 @@ const functionDeclarations: FunctionDeclaration[] = [
 
 const tools: Tool[] = [{ functionDeclarations }];
 
+/**
+ * 🔄 自動重試輔助函式 (處理 503 / 429 暫時性過載)
+ */
+async function sendMessageWithRetry(chatSession: any, payload: any, maxRetries = 3, initialDelay = 1000) {
+  let delay = initialDelay;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await chatSession.sendMessage(payload);
+    } catch (error: any) {
+      const isTransientError =
+        error?.status === 503 ||
+        error?.status === 429 ||
+        String(error?.message).includes('503') ||
+        String(error?.message).includes('high demand');
+
+      if (isTransientError && attempt < maxRetries) {
+        console.warn(`[Gemini API Warning] 遇到 503 過載，等待 ${delay}ms 後進行第 ${attempt} 次重試...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay *= 2; // 指數退避，每次延遲翻倍
+      } else {
+        throw error; // 非暫時性錯誤或超過重試次數則拋出
+      }
+    }
+  }
+}
+
 export async function POST(req: Request) {
   try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: '系統未設定 GEMINI_API_KEY，請至 Vercel 專案設定 Environment Variables。' },
+        { status: 500 }
+      );
+    }
+
     const { message, userId } = await req.json();
 
     if (!message || !userId) {
-      return NextResponse.json({ error: '缺少必要參數' }, { status: 400 });
+      return NextResponse.json({ error: '缺少必要參數 (message 或 userId)' }, { status: 400 });
     }
+
+    const genAI = new GoogleGenerativeAI(apiKey);
 
     // 1. 讀取使用者的記憶與偏好規則 (user_instructions)
     const { data: instructionsData } = await supabase
@@ -107,75 +140,95 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
 1. 當使用者提到要「提醒」、「鬧鐘」、「叫我...」時，請主動呼叫 set_reminder 工具。
 2. 當使用者明確要求「記住...」、「以後請...」時，請主動呼叫 save_instruction 工具。
 3. 保持親切、簡潔且具效益的回答。
-4.所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
+4. 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
 5.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！`;
 
-    // 4. 初始化 Gemini 模型
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash-lite',
-      systemInstruction: systemInstruction,
-      tools: tools,
-    });
+    // 4. 定義優先使用與備援的模型清單
+    const candidateModels = ['gemini-2.0-flash', 'gemini-1.5-flash'];
+    let result: any = null;
+    let responseText = '';
 
-    // 5. 建立 Chat Session
-    const chat = model.startChat({
-      history: formattedHistory,
-    });
+    // 5. 嘗試與模型進行對話 (具備模型切換與重試機制)
+    let lastError: any = null;
 
-    let result = await chat.sendMessage(message);
-    let response = await result.response;
-    let responseText = response.text();
+    for (const modelName of candidateModels) {
+      try {
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          systemInstruction: systemInstruction,
+          tools: tools,
+        });
 
-    // 6. 處理 Function Calling
-    const functionCalls = response.functionCalls();
+        const chat = model.startChat({ history: formattedHistory });
 
-    if (functionCalls && functionCalls.length > 0) {
-      const call = functionCalls[0];
-      const { name, args } = call;
+        // 呼叫帶有自動重試的 sendMessage
+        result = await sendMessageWithRetry(chat, message);
+        let response = await result.response;
+        responseText = response.text();
 
-      if (name === 'set_reminder') {
-        const { title, remind_at, repeat_type, reminder_type } = args as any;
+        // 6. 處理 Function Calling
+        const functionCalls = response.functionCalls();
 
-        await supabase.from('user_reminders').insert([
-          {
-            user_id: userId,
-            title: title,
-            remind_at: remind_at || new Date().toISOString(),
-            repeat_type: repeat_type || 'none',
-            reminder_type: reminder_type || 'both',
-            is_triggered: false,
-          },
-        ]);
+        if (functionCalls && functionCalls.length > 0) {
+          const call = functionCalls[0];
+          const { name, args } = call;
 
-        result = await chat.sendMessage([
-          {
-            functionResponse: {
-              name: 'set_reminder',
-              response: { success: true, message: `已成功為您設定提醒：${title}` },
-            },
-          },
-        ]);
-        responseText = result.response.text();
-      } else if (name === 'save_instruction') {
-        const { instruction } = args as any;
+          if (name === 'set_reminder') {
+            const { title, remind_at, repeat_type, reminder_type } = args as any;
 
-        await supabase.from('user_instructions').insert([
-          {
-            user_id: userId,
-            instruction: instruction,
-          },
-        ]);
+            await supabase.from('user_reminders').insert([
+              {
+                user_id: userId,
+                title: title,
+                remind_at: remind_at || new Date().toISOString(),
+                repeat_type: repeat_type || 'none',
+                reminder_type: reminder_type || 'both',
+                is_triggered: false,
+              },
+            ]);
 
-        result = await chat.sendMessage([
-          {
-            functionResponse: {
-              name: 'save_instruction',
-              response: { success: true, message: `已成功儲存偏好規則：${instruction}` },
-            },
-          },
-        ]);
-        responseText = result.response.text();
+            result = await sendMessageWithRetry(chat, [
+              {
+                functionResponse: {
+                  name: 'set_reminder',
+                  response: { success: true, message: `已成功為您設定提醒：${title}` },
+                },
+              },
+            ]);
+            responseText = result.response.text();
+          } else if (name === 'save_instruction') {
+            const { instruction } = args as any;
+
+            await supabase.from('user_instructions').insert([
+              {
+                user_id: userId,
+                instruction: instruction,
+              },
+            ]);
+
+            result = await sendMessageWithRetry(chat, [
+              {
+                functionResponse: {
+                  name: 'save_instruction',
+                  response: { success: true, message: `已成功儲存偏好規則：${instruction}` },
+                },
+              },
+            ]);
+            responseText = result.response.text();
+          }
+        }
+
+        // 成功執行完成，跳出模型嘗試迴圈
+        lastError = null;
+        break;
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`[Gemini API Model Error] 模型 ${modelName} 失敗，嘗試切換備援模型... 錯誤:`, err?.message);
       }
+    }
+
+    if (lastError) {
+      throw lastError; // 若所有模型均嘗試失敗，拋出最後錯誤
     }
 
     // 7. 將本次對話紀錄存入 Supabase
@@ -187,6 +240,15 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
     return NextResponse.json({ reply: responseText });
   } catch (err: any) {
     console.error('Chat API 錯誤:', err);
+
+    // 回傳友善錯誤訊息給前端
+    if (err?.status === 503 || String(err?.message).includes('503')) {
+      return NextResponse.json(
+        { error: 'Google AI 服務目前流量過高，請稍後再試一次。' },
+        { status: 503 }
+      );
+    }
+
     return NextResponse.json(
       { error: '伺服器處理失敗', details: err?.message || String(err) },
       { status: 500 }
