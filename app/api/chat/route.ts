@@ -1,6 +1,14 @@
 import { NextResponse } from 'next/server';
-import { GoogleGenerativeAI, FunctionDeclaration, Type, Tool } from '@google/generative-ai';
+import {
+  GoogleGenerativeAI,
+  FunctionDeclaration,
+  Tool,
+  FunctionDeclarationSchemaType,
+} from '@google/generative-ai';
 import { createClient } from '@supabase/supabase-js';
+
+// 🛠️ 將 FunctionDeclarationSchemaType 映射為 Type，解決匯入錯誤
+const Type = FunctionDeclarationSchemaType;
 
 // 初始化 Supabase Client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -12,7 +20,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const apiKey = process.env.GEMINI_API_KEY || '';
 const genAI = new GoogleGenerativeAI(apiKey);
 
-// 🛠️ 明確標註 FunctionDeclaration[] 型別，避免 TypeScript 編譯報錯
+// 🛠️ Function Calling 工具定義
 const functionDeclarations: FunctionDeclaration[] = [
   {
     name: 'set_reminder',
@@ -56,7 +64,6 @@ const functionDeclarations: FunctionDeclaration[] = [
   },
 ];
 
-// 🛠️ 明確標註 Tool[] 型別
 const tools: Tool[] = [{ functionDeclarations }];
 
 export async function POST(req: Request) {
@@ -95,6 +102,7 @@ export async function POST(req: Request) {
 
 使用者設定的個人習慣與大腦規則：
 ${userPreferences}
+
 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
 
 【Execution Rules 防止幻覺硬性規定】
