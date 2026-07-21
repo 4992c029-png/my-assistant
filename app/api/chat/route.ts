@@ -193,7 +193,7 @@ async function runGroqFallbackFetch(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      model: 'groq/compound',
       messages: messages,
       tools: groqTools,
       tool_choice: 'auto',
@@ -232,7 +232,7 @@ async function runGroqFallbackFetch(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'groq/compound',
         messages: messages,
       }),
     });
@@ -373,7 +373,7 @@ ${remindersText}
 
     // D. 若所有 Gemini Keys/模型皆額度爆滿或失敗，觸發 Groq REST API 備援！
     if (!success) {
-      console.warn('⚠️ [Gemini 全部失效/額度滿] 觸發 Groq (llama-3.3-70b-versatile) 原生 REST API 備援...');
+      console.warn('⚠️ [Gemini 全部失效/額度滿] 觸發 Groq (groq/compound) 原生 REST API 備援...');
       try {
         responseText = await runGroqFallbackFetch(systemInstruction, recentMessages, message, userIdStr);
         success = true;
