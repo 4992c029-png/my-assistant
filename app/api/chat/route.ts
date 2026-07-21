@@ -9,9 +9,21 @@ import { createClient } from '@supabase/supabase-js';
 
 const Type = SchemaType;
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey =
+/**
+ * 強制淨化字串，移除所有非 ASCII 字元 (避免 HTTP Header 觸發 ByteString 崩潰)
+ */
+function sanitizeAscii(str: string | undefined): string {
+  if (!str) return '';
+  return str.replace(/[^\x00-\x7F]/g, '').trim();
+}
+
+const rawSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const rawSupabaseKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+
+// 自動過濾非 ASCII 字元，防止 Supabase Header 塞入中文字
+const supabaseUrl = sanitizeAscii(rawSupabaseUrl);
+const supabaseKey = sanitizeAscii(rawSupabaseKey);
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 function safeToISOString(input: any): string | null {
@@ -30,8 +42,7 @@ function safeToISOString(input: any): string | null {
 }
 
 /**
- * 防爆 UserId 清理器：
- * 將非 ASCII (如中文) 轉為安全 encodeURIComponent 格式，徹底解決 Undici ByteString (character > 255) 崩潰問題
+ * 清理並安全化 UserId，確保完全為純英數字/URL Safe 字元
  */
 function cleanUserId(rawId: any): string {
   if (!rawId) return 'default_user';
@@ -46,13 +57,13 @@ function cleanUserId(rawId: any): string {
 }
 
 /**
- * 取得 API Keys 清單 (支援用逗號分隔的多組 Key 備援)
+ * 取得 API Keys 清單 (支援用逗號分隔的多組 Key 輪詢備援)
  */
 function getApiKeys(): string[] {
   const raw = process.env.GEMINI_API_KEY || '';
   return raw
     .split(',')
-    .map((k) => k.trim())
+    .map((k) => sanitizeAscii(k))
     .filter(Boolean);
 }
 
@@ -164,7 +175,7 @@ export async function POST(req: Request) {
 
     const userRules = instructionsData?.map((item) => item.instruction).join('\n') || '';
 
-    // 2. 讀取未完成提醒 (userIdStr 已轉化為 safe ASCII)
+    // 2. 讀取未完成提醒
     const { data: activeReminders, error: fetchErr } = await supabase
       .from('user_reminders')
       .select('id, title, remind_at, repeat_type')
@@ -224,27 +235,25 @@ ${remindersText}
 4. 呼叫工具後，你必須根據工具傳回的結果實話實說：
    - 若 success 為 false，必須如實告知使用者失敗原因，嚴禁謊報設定成功！
    - 若 success 為 true，請親切簡潔地回覆使用者。
-   
 請嚴格遵守以下原則：
 1. 保持親切、簡潔且具效益的回答。
 2. 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
 3.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！`;
 
-    // 修正模型的正確 API 名稱，避開 404 與 低額度限制
+    // 修正模型的正確 API 名稱，移除無效的 -latest 避開 404
     const candidateModels = [
       'gemini-2.0-flash',
-      'gemini-2.0-flash-lite',
-      'gemini-1.5-flash-latest',
-      'gemini-1.5-pro-latest',
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
       'gemini-2.5-flash-lite',
-      'gemini-2.5-flash',
+      'gemini-2.5-flash',  
     ];
 
     let responseText = '';
     let lastError: any = null;
     let requestSuccess = false;
 
-    // 雙層備援機制：依次輪詢 API Key 與 模型清單
+    // 雙層輪詢備援機制：依次嘗試 API Key 與 正確的模型清單
     keyLoop: for (const apiKey of apiKeys) {
       const genAI = new GoogleGenerativeAI(apiKey);
 
@@ -396,7 +405,7 @@ ${remindersText}
           }
 
           requestSuccess = true;
-          break keyLoop; // 成功呼叫後跳出所有迴圈
+          break keyLoop;
         } catch (err: any) {
           lastError = err;
           console.warn(`[Gemini API 嘗試失敗] Key/模型 (${modelName}):`, err?.message);
@@ -443,7 +452,7 @@ ${remindersText}
   } catch (err: any) {
     console.error('Chat API 最終錯誤:', err);
     return NextResponse.json(
-      { error: 'API 額度耗盡或處理失敗，請稍後再試或新增 API Key。', details: err?.message || String(err) },
+      { error: 'API 額度耗盡或處理失敗，請稍後再試或在 .env.local 新增更多 GEMINI_API_KEY。', details: err?.message || String(err) },
       { status: 500 }
     );
   }
