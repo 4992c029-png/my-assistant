@@ -8,7 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 
 const Type = SchemaType;
 
-// 1. 環境變數淨化（過濾中文字元與非 ASCII 字元，避免 Header 崩潰）
+// 1. 環境變數淨化（過濾非 ASCII 字元，避免 Header 崩潰）
 function sanitizeAscii(str: string | undefined): string {
   if (!str) return '';
   return str.replace(/[^\x00-\x7F]/g, '').trim();
@@ -20,12 +20,16 @@ const supabaseKey = sanitizeAscii(
 );
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// 精確時間格式化（支援帶台灣時區 +08:00 修正）
 function safeToISOString(input: any): string | null {
   if (!input) return null;
   try {
-    let str = String(input).trim();
+    let str = String(input).trim().replace(' ', 'T');
+    // 如果傳入不帶時區的標準年月日時分秒，自動補上台灣時區 +08:00
     if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(str)) {
-      str += ':00';
+      str += ':00+08:00';
+    } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(str)) {
+      str += '+08:00';
     }
     const d = new Date(str);
     if (isNaN(d.getTime())) return null;
@@ -51,12 +55,12 @@ function getGeminiApiKeys(): string[] {
 const functionDeclarations: FunctionDeclaration[] = [
   {
     name: 'set_reminder',
-    description: '幫使用者設定鬧鐘或提醒事項。當使用者要求新增提醒、設定鬧鐘或叫我做某事時呼叫此工具。',
+    description: '幫使用者設定鬧鐘或提醒事項。必須將時間詞與事件標題徹底分離。',
     parameters: {
       type: Type.OBJECT,
       properties: {
-        title: { type: Type.STRING, description: '提醒事項的標題或內容' },
-        remind_at: { type: Type.STRING, description: '提醒時間 (標準 ISO 8601 時間字串)' },
+        title: { type: Type.STRING, description: '提醒事項的純事件名稱（絕對不能包含時間詞，例如：「開會」、「吃藥」）' },
+        remind_at: { type: Type.STRING, description: '目標提醒時間 (包含台灣時區 +08:00 的 ISO 8601 字串，如 2026-07-21T17:00:00+08:00)' },
         repeat_type: { type: Type.STRING, description: '重複類型：none, daily, weekly, monthly' },
         reminder_type: { type: Type.STRING, description: '提醒方式：both, alert, audio' },
       },
@@ -87,7 +91,6 @@ const functionDeclarations: FunctionDeclaration[] = [
   },
 ];
 
-// 轉譯成 Groq / OpenAI 相容格式
 const groqTools = functionDeclarations.map((f) => ({
   type: 'function',
   function: {
@@ -97,13 +100,20 @@ const groqTools = functionDeclarations.map((f) => ({
   },
 }));
 
-// 3. 核心工具執行邏輯（Groq 與 Gemini 共用）
+// 3. 核心工具執行邏輯（過濾異常用字）
 async function executeTool(name: string, args: any, userIdStr: string) {
   if (name === 'set_reminder') {
-    const rawTitle = args?.title;
+    let rawTitle = String(args?.title || '').trim();
     const rawRemindAt = args?.remind_at || args?.remindAt;
     const repeatType = args?.repeat_type || args?.repeatType || 'none';
     const reminderType = args?.reminder_type || args?.reminderType || 'both';
+
+    // 防護機制：避免模型誤將系統提示或歷史對話當作標題
+    const filterKeywords = ['取消', '重新設定', '已經被取消', '已清除', '系統訊息', '已經取消'];
+    if (filterKeywords.some((kw) => rawTitle.includes(kw)) || rawTitle.length > 50) {
+      return { success: false, error: '無效的提醒標題，請指定具體要提醒的事項（例如：開會、吃藥）。' };
+    }
+
     const validRemindAt = safeToISOString(rawRemindAt) || new Date().toISOString();
 
     const { data, error } = await supabase
@@ -111,7 +121,7 @@ async function executeTool(name: string, args: any, userIdStr: string) {
       .insert([
         {
           user_id: userIdStr,
-          title: String(rawTitle).trim(),
+          title: rawTitle,
           remind_at: validRemindAt,
           repeat_type: repeatType,
           reminder_type: reminderType,
@@ -123,7 +133,7 @@ async function executeTool(name: string, args: any, userIdStr: string) {
     if (error || !data || data.length === 0) {
       return { success: false, error: `寫入資料庫失敗：${error?.message || '未知錯誤'}` };
     }
-    return { success: true, message: `已成功在資料庫寫入提醒：${rawTitle}` };
+    return { success: true, message: `已成功在資料庫寫入提醒：「${rawTitle}」` };
   }
 
   if (name === 'cancel_reminder') {
@@ -162,7 +172,7 @@ async function executeTool(name: string, args: any, userIdStr: string) {
   return { success: false, error: '未知的工具名稱' };
 }
 
-// 4. 【優先執行】使用 Groq 高速模型處理對話與工具呼叫
+// 4. Groq 執行引擎（完整支援多重 Tool Calling）
 async function runGroqPrimary(
   systemPrompt: string,
   history: Array<{ role: string; content: string }>,
@@ -185,7 +195,6 @@ async function runGroqPrimary(
 
   const groqEndpoint = 'https://api.groq.com/openai/v1/chat/completions';
 
-  // 第一次呼叫 Groq API (使用高 TPM 與高效能的 llama-3.3-70b-versatile 模型)
   const response = await fetch(groqEndpoint, {
     method: 'POST',
     headers: {
@@ -208,22 +217,27 @@ async function runGroqPrimary(
   const data = await response.json();
   const responseMessage = data.choices?.[0]?.message;
 
-  // 處理 Groq 的 Tool Calling
+  // 處理 Groq 工具呼叫（支援多個 Tool Call 迴圈）
   if (responseMessage?.tool_calls && responseMessage.tool_calls.length > 0) {
-    const toolCall = responseMessage.tool_calls[0];
-    const functionName = toolCall.function.name;
-    const functionArgs = JSON.parse(toolCall.function.arguments || '{}');
-
-    // 執行資料庫操作
-    const toolResult = await executeTool(functionName, functionArgs, userIdStr);
-
-    // 將工具結果帶回給 Groq 產生最終親切回覆
     messages.push(responseMessage);
-    messages.push({
-      role: 'tool',
-      tool_call_id: toolCall.id,
-      content: JSON.stringify(toolResult),
-    });
+
+    for (const toolCall of responseMessage.tool_calls) {
+      const functionName = toolCall.function.name;
+      let functionArgs = {};
+      try {
+        functionArgs = JSON.parse(toolCall.function.arguments || '{}');
+      } catch (e) {
+        functionArgs = {};
+      }
+
+      const toolResult = await executeTool(functionName, functionArgs, userIdStr);
+
+      messages.push({
+        role: 'tool',
+        tool_call_id: toolCall.id,
+        content: JSON.stringify(toolResult),
+      });
+    }
 
     const secondResponse = await fetch(groqEndpoint, {
       method: 'POST',
@@ -276,27 +290,30 @@ export async function POST(req: Request) {
       ? activeReminders.map((r) => `- [ID: ${r.id}] 標題: "${r.title}" (時間: ${r.remind_at}, 重複: ${r.repeat_type || 'none'})`).join('\n')
       : '目前無任何未完成的提醒事項。';
 
-    // B. 讀取對話歷史
+    // B. 【歷史紀錄擴充至極致】：撈取最近 60 天紀錄，並保留最近 80 條訊息
     const { data: dailyRecords } = await supabase
       .from('daily_chat_history')
-      .select('messages')
+      .select('messages, chat_date')
       .eq('user_id', userIdStr)
-      .order('chat_date', { ascending: true })
-      .limit(7);
+      .order('chat_date', { ascending: false })
+      .limit(60);
 
     let allMessages: Array<{ role: string; content: string }> = [];
-    if (dailyRecords) {
-      for (const record of dailyRecords) {
+    if (dailyRecords && dailyRecords.length > 0) {
+      const sortedRecords = [...dailyRecords].reverse();
+      for (const record of sortedRecords) {
         if (Array.isArray(record.messages)) {
           allMessages.push(...record.messages);
         }
       }
     }
-    const recentMessages = allMessages.slice(-20);
+    const recentMessages = allMessages.slice(-80);
 
+    // 計算當前台灣時間 (UTC+8)
     const now = new Date();
     const taiwanTimeStr = new Date(now.getTime() + 8 * 60 * 60 * 1000).toISOString().replace('Z', '+08:00');
 
+    // 嚴格指示 System Prompt（徹底解決名稱錯誤與過往訊息干擾）
     const systemInstruction = `你是一位貼心且專業的個人 AI 助理。
 當前台灣時間 (UTC+8) 為：${taiwanTimeStr}
 
@@ -306,11 +323,18 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
 使用者目前在資料庫中生效的未完成提醒事項：
 ${remindersText}
 
-【時間推算與工具呼叫規則】：
-1. 當使用者要求新增「提醒」、「鬧鐘」或「叫我做某事」時，請務必根據【台灣時間】計算目標時間，轉換為 ISO 8601 UTC 時間字串傳入 set_reminder，並呼叫 set_reminder。
-2. 當使用者要求「取消」、「刪除」提醒事項或鬧鐘時，必須呼叫 cancel_reminder 工具。
-3. 當使用者要求「記住...」、「以後請...」時，必須呼叫 save_instruction 工具。
-4. 呼叫工具後，你必須根據工具傳回的結果實話實說，若成功請親切簡潔地回覆使用者。
+【提醒事項設定 (set_reminder) 絕對規範】：
+1. 標題與時間徹底剝離：
+   - 標題 (title) 必須為純事件名稱（例如：「開會」、「吃藥」、「買牛奶」）。
+   - 嚴禁把時間詞（如「下午5點」、「明天早上」、「10分鐘後」）寫入 title 中！
+2. 精確時間推算 (remind_at)：
+   - 參考台灣時間 (${taiwanTimeStr}) 推算絕對時間。
+   - 例：若當前是 13:40，使用者說「下午5點開會」，提醒時間為今天 17:00:00，帶時區字串如 "${taiwanTimeStr.split('T')[0]}T17:00:00+08:00"。
+   - 例：若當前是 18:00，使用者說「5點開會」，提醒時間為明天 17:00:00。
+3. 嚴禁干擾與錯誤提取：
+   - 絕對禁止使用 AI 助理過往的回應文字（如「今天全部的提醒已被取消...」）作為新提醒的標題！
+   - 只根據使用者【最新發送的一條訊息】提取要設定的事項。
+4. 呼叫工具後，請根據真實結果簡潔回覆使用者。
 
 請嚴格遵守以下原則：
 1.保持親切、簡潔且具效益的回答。
@@ -320,17 +344,16 @@ ${remindersText}
     let responseText = '';
     let success = false;
 
-    // C. 【優先步驟】首先嘗試透過 Groq (高 TPM) 進行處理
+    // C. 優先使用 Groq 高 TPM 模型
     try {
-      console.log('🚀 [Chat API] 優先嘗試使用 Groq (llama-3.3-70b-versatile)...');
+      console.log('🚀 [Chat API] 優先使用 Groq (llama-3.3-70b-versatile)...');
       responseText = await runGroqPrimary(systemInstruction, recentMessages, message, userIdStr);
       success = true;
-      console.log('✅ [Chat API] Groq 處理成功！');
     } catch (groqErr: any) {
-      console.warn('⚠️ [Groq 優先執行失敗/觸發 TPM 限制]，準備切換至 Gemini 備援引擎...', groqErr?.message || groqErr);
+      console.warn('⚠️ [Groq 執行失敗/觸發限制]，切換至 Gemini 備援...', groqErr?.message || groqErr);
     }
 
-    // D. 【備援步驟】若 Groq 失敗或 TPM 爆滿，依序嘗試 Gemini API 進行備援
+    // D. Gemini 備援機制
     if (!success) {
       const geminiKeys = getGeminiApiKeys();
       const validGeminiModels = ['gemini-2.0-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash'];
@@ -340,7 +363,7 @@ ${remindersText}
 
         for (const modelName of validGeminiModels) {
           try {
-            console.log(`🔄 [Gemini 備援] 嘗試使用模型 (${modelName})...`);
+            console.log(`🔄 [Gemini 備援] 使用模型 (${modelName})...`);
             const model = genAI.getGenerativeModel({
               model: modelName,
               systemInstruction: systemInstruction,
@@ -375,21 +398,19 @@ ${remindersText}
             }
 
             success = true;
-            console.log(`✅ [Chat API] 成功使用 Gemini 備援模型 (${modelName})`);
             break geminiLoop;
           } catch (geminiErr: any) {
-            console.warn(`[Gemini 備援嘗試失敗] 模型 (${modelName}):`, geminiErr?.message || geminiErr);
+            console.warn(`[Gemini 失敗] ${modelName}:`, geminiErr?.message || geminiErr);
           }
         }
       }
     }
 
-    // E. 如果 Groq 與所有 Gemini 備援皆失敗，拋出最終錯誤
     if (!success) {
-      throw new Error('Groq 與 Gemini 備援皆無法處理請求（所有模型的額度與 TPM 皆已耗盡）。');
+      throw new Error('Groq 與 Gemini 皆無法回應請求。');
     }
 
-    // F. 寫入對話歷史紀錄
+    // E. 寫入歷史對話
     const todayStr = new Date().toISOString().split('T')[0];
     const { data: todayRecord } = await supabase
       .from('daily_chat_history')
