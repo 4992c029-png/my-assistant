@@ -6,19 +6,26 @@ function sanitizeAscii(str: string | undefined): string {
 }
 
 export async function POST(req: Request) {
-  try {
-    const { text, lang = 'zh' } = await req.json();
+  // 在 try 外部宣告 text，確保在 catch 區塊中也能作為 fallback 存取
+  let text = '';
 
+  try {
+    const body = await req.json();
+    text = body.text || '';
+    const lang = body.lang || 'zh';
+
+    // 若傳入內容空白或非字串，直接回傳空字串
     if (!text || typeof text !== 'string' || !text.trim()) {
       return NextResponse.json({ refinedText: '' });
     }
 
     const groqApiKey = sanitizeAscii(process.env.GROQ_API_KEY);
+    
+    // 若未設定 API Key，回傳原始文字
     if (!groqApiKey) {
       return NextResponse.json({ refinedText: text });
     }
 
-    // 使用超快速模型 llama-3.1-8b-instant 進行 <300ms 語意校正
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -30,12 +37,9 @@ export async function POST(req: Request) {
         messages: [
           {
             role: 'system',
-            content: `你是一個專業的語音辨識文本校正專家。
-請修正以下語音轉文字草稿中的：
-1. 同音錯別字與不通順詞彙。
-2. 自動加上正確的標點符號。
-3. 保持原始語意與人稱不變，務必簡潔自然。
-4. 絕對禁止輸出任何解釋、問候或引號，直接輸出修正後的最終文字。語詞語言維持為 ${lang === 'en' ? '英文' : '繁體中文'}。`,
+            content: `Correct this voice transcript. Maintain language as ${
+              lang === 'en' ? 'English' : 'Traditional Chinese'
+            }. Output only corrected text.`,
           },
           { role: 'user', content: text },
         ],
@@ -45,15 +49,17 @@ export async function POST(req: Request) {
     });
 
     if (!response.ok) {
-      return NextResponse.json({ refinedText: text });
+      throw new Error(`Groq API 呼叫失敗: ${response.statusText}`);
     }
 
     const data = await response.json();
-    const refinedText = data.choices?.[0]?.message?.content?.trim() || text;
+    const refinedText = data.choices?.[0]?.message?.content?.trim();
 
-    return NextResponse.json({ refinedText });
+    // 成功取得校正結果則回傳，若解析空值則回退原始文字
+    return NextResponse.json({ refinedText: refinedText || text });
   } catch (err) {
     console.error('語音潤飾失敗:', err);
+    // 發生例外時安全回退原始輸入文字
     return NextResponse.json({ refinedText: text });
   }
 }
