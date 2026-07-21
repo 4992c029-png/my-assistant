@@ -14,7 +14,25 @@ const supabaseKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// 🛠️ Function Calling 工具宣告
+function normalizeToISOString(input: any): string | null {
+  if (!input) return null;
+  let str = String(input).trim();
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(str)) {
+    str += ':00';
+  }
+  const d = new Date(str);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function normalizeUserId(userId: any): string {
+  if (!userId) return '';
+  if (typeof userId === 'object') {
+    return String(userId.id || userId.userId || userId.sub || '').trim();
+  }
+  return String(userId).trim();
+}
+
 const functionDeclarations: FunctionDeclaration[] = [
   {
     name: 'set_reminder',
@@ -109,12 +127,12 @@ export async function POST(req: Request) {
     }
 
     const { message, userId } = await req.json();
+    const cleanUserId = normalizeUserId(userId);
 
-    if (!message || !userId) {
+    if (!message || !cleanUserId) {
       return NextResponse.json({ error: '缺少必要參數 (message 或 userId)' }, { status: 400 });
     }
 
-    const cleanUserId = String(userId).trim();
     const genAI = new GoogleGenerativeAI(apiKey);
 
     // 1. 讀取記憶規則
@@ -137,7 +155,7 @@ export async function POST(req: Request) {
     }
 
     const remindersText = activeReminders && activeReminders.length > 0
-      ? activeReminders.map((r) => `- [ID: ${r.id}] 標題: "${r.title}" (預定時間: ${r.remind_at}, 重複: ${r.repeat_type || 'none'})`).join('\n')
+      ? activeReminders.map((r) => `- [ID: ${r.id}] 標題: "${r.title}" (時間: ${r.remind_at}, 重複: ${r.repeat_type || 'none'})`).join('\n')
       : '目前無任何未完成的提醒事項。';
 
     // 3. 讀取對話紀錄
@@ -163,7 +181,6 @@ export async function POST(req: Request) {
       parts: [{ text: item.content || '' }],
     }));
 
-    // 時區時間處理
     const now = new Date();
     const nowUtcStr = now.toISOString();
     const taiwanTimeStr = new Date(now.getTime() + 8 * 60 * 60 * 1000).toISOString().replace('Z', '+08:00');
@@ -220,13 +237,7 @@ ${remindersText}
             const repeatType = args?.repeat_type || (args as any)?.repeatType || 'none';
             const reminderType = args?.reminder_type || (args as any)?.reminderType || 'both';
 
-            let validRemindAt = new Date().toISOString();
-            if (rawRemindAt) {
-              const parsedDate = new Date(rawRemindAt);
-              if (!isNaN(parsedDate.getTime())) {
-                validRemindAt = parsedDate.toISOString();
-              }
-            }
+            const validRemindAt = normalizeToISOString(rawRemindAt) || new Date().toISOString();
 
             const { data: insertedData, error: insertError } = await supabase
               .from('user_reminders')
@@ -361,7 +372,7 @@ ${remindersText}
       throw lastError;
     }
 
-    // 5. 寫入歷史對話 (已修復 TypeScript Null 安全檢測)
+    // 5. 寫入對話歷史
     const todayStr = new Date().toISOString().split('T')[0];
 
     const { data: todayRecord } = await supabase
