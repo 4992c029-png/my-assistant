@@ -8,7 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 
 const Type = SchemaType;
 
-// 1. 環境變數淨化（過濾非 ASCII 字元，避免 Header 崩潰）
+// 環境變數淨化
 function sanitizeAscii(str: string | undefined): string {
   if (!str) return '';
   return str.replace(/[^\x00-\x7F]/g, '').trim();
@@ -20,12 +20,11 @@ const supabaseKey = sanitizeAscii(
 );
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// 精確時間格式化（支援帶台灣時區 +08:00 修正）
+// 時間格式化 (支援台灣時區 +08:00)
 function safeToISOString(input: any): string | null {
   if (!input) return null;
   try {
     let str = String(input).trim().replace(' ', 'T');
-    // 如果傳入不帶時區的標準年月日時分秒，自動補上台灣時區 +08:00
     if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(str)) {
       str += ':00+08:00';
     } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(str)) {
@@ -51,7 +50,7 @@ function getGeminiApiKeys(): string[] {
   return raw.split(',').map((k) => sanitizeAscii(k)).filter(Boolean);
 }
 
-// 2. 定義統一工具規格 (Tools)
+// 統一工具規格
 const functionDeclarations: FunctionDeclaration[] = [
   {
     name: 'set_reminder',
@@ -100,7 +99,7 @@ const groqTools = functionDeclarations.map((f) => ({
   },
 }));
 
-// 3. 核心工具執行邏輯（過濾異常用字）
+// 工具執行邏輯
 async function executeTool(name: string, args: any, userIdStr: string) {
   if (name === 'set_reminder') {
     let rawTitle = String(args?.title || '').trim();
@@ -108,7 +107,6 @@ async function executeTool(name: string, args: any, userIdStr: string) {
     const repeatType = args?.repeat_type || args?.repeatType || 'none';
     const reminderType = args?.reminder_type || args?.reminderType || 'both';
 
-    // 防護機制：避免模型誤將系統提示或歷史對話當作標題
     const filterKeywords = ['取消', '重新設定', '已經被取消', '已清除', '系統訊息', '已經取消'];
     if (filterKeywords.some((kw) => rawTitle.includes(kw)) || rawTitle.length > 50) {
       return { success: false, error: '無效的提醒標題，請指定具體要提醒的事項（例如：開會、吃藥）。' };
@@ -172,7 +170,7 @@ async function executeTool(name: string, args: any, userIdStr: string) {
   return { success: false, error: '未知的工具名稱' };
 }
 
-// 4. Groq 執行引擎（完整支援多重 Tool Calling）
+// Groq 執行引擎
 async function runGroqPrimary(
   systemPrompt: string,
   history: Array<{ role: string; content: string }>,
@@ -217,7 +215,6 @@ async function runGroqPrimary(
   const data = await response.json();
   const responseMessage = data.choices?.[0]?.message;
 
-  // 處理 Groq 工具呼叫（支援多個 Tool Call 迴圈）
   if (responseMessage?.tool_calls && responseMessage.tool_calls.length > 0) {
     messages.push(responseMessage);
 
@@ -272,7 +269,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: '缺少必要參數 (message 或 userId)' }, { status: 400 });
     }
 
-    // A. 讀取記憶與未完成提醒
+    // 1. 讀取記憶與未完成提醒
     const { data: instructionsData } = await supabase
       .from('user_instructions')
       .select('instruction')
@@ -290,7 +287,7 @@ export async function POST(req: Request) {
       ? activeReminders.map((r) => `- [ID: ${r.id}] 標題: "${r.title}" (時間: ${r.remind_at}, 重複: ${r.repeat_type || 'none'})`).join('\n')
       : '目前無任何未完成的提醒事項。';
 
-    // B. 【歷史紀錄擴充至極致】：撈取最近 60 天紀錄，並保留最近 80 條訊息
+    // 2. 歷史紀錄擴充
     const { data: dailyRecords } = await supabase
       .from('daily_chat_history')
       .select('messages, chat_date')
@@ -309,11 +306,9 @@ export async function POST(req: Request) {
     }
     const recentMessages = allMessages.slice(-80);
 
-    // 計算當前台灣時間 (UTC+8)
     const now = new Date();
     const taiwanTimeStr = new Date(now.getTime() + 8 * 60 * 60 * 1000).toISOString().replace('Z', '+08:00');
 
-    // 嚴格指示 System Prompt（徹底解決名稱錯誤與過往訊息干擾）
     const systemInstruction = `你是一位貼心且專業的個人 AI 助理。
 當前台灣時間 (UTC+8) 為：${taiwanTimeStr}
 
@@ -325,35 +320,29 @@ ${remindersText}
 
 【提醒事項設定 (set_reminder) 絕對規範】：
 1. 標題與時間徹底剝離：
-   - 標題 (title) 必須為純事件名稱（例如：「開會」、「吃藥」、「買牛奶」）。
-   - 嚴禁把時間詞（如「下午5點」、「明天早上」、「10分鐘後」）寫入 title 中！
+   - 標題 (title) 必須為純事件名稱（例如：「開會」、「吃藥」）。
+   - 嚴禁把時間詞（如「下午5點」、「明天早上」）寫入 title 中！
 2. 精確時間推算 (remind_at)：
-   - 參考台灣時間 (${taiwanTimeStr}) 推算絕對時間。
-   - 例：若當前是 13:40，使用者說「下午5點開會」，提醒時間為今天 17:00:00，帶時區字串如 "${taiwanTimeStr.split('T')[0]}T17:00:00+08:00"。
-   - 例：若當前是 18:00，使用者說「5點開會」，提醒時間為明天 17:00:00。
-3. 嚴禁干擾與錯誤提取：
-   - 絕對禁止使用 AI 助理過往的回應文字（如「今天全部的提醒已被取消...」）作為新提醒的標題！
-   - 只根據使用者【最新發送的一條訊息】提取要設定的事項。
-4. 呼叫工具後，請根據真實結果簡潔回覆使用者。
+   - 參考台灣時間 (${taiwanTimeStr}) 推算絕對時間 ISO 8601。
+3. 呼叫工具後，根據真實結果簡潔回覆使用者。
 
 請嚴格遵守以下原則：
-1.保持親切、簡潔且具效益的回答。
-2.所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
-3.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！`;
+1. 保持親切、簡潔且具效益的回答。
+2. 回覆長度依照複雜度彈性調整。
+3. 【禁止憑空捏造】：資料不足時請直接說明。`;
 
     let responseText = '';
     let success = false;
 
-    // C. 優先使用 Groq 高 TPM 模型
+    // 優先 Groq
     try {
-      console.log('🚀 [Chat API] 優先使用 Groq (llama-3.3-70b-versatile)...');
       responseText = await runGroqPrimary(systemInstruction, recentMessages, message, userIdStr);
       success = true;
     } catch (groqErr: any) {
-      console.warn('⚠️ [Groq 執行失敗/觸發限制]，切換至 Gemini 備援...', groqErr?.message || groqErr);
+      console.warn('⚠️ Groq 切換至 Gemini 備援...', groqErr?.message || groqErr);
     }
 
-    // D. Gemini 備援機制
+    // Gemini 備援
     if (!success) {
       const geminiKeys = getGeminiApiKeys();
       const validGeminiModels = ['gemini-2.0-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash'];
@@ -363,7 +352,6 @@ ${remindersText}
 
         for (const modelName of validGeminiModels) {
           try {
-            console.log(`🔄 [Gemini 備援] 使用模型 (${modelName})...`);
             const model = genAI.getGenerativeModel({
               model: modelName,
               systemInstruction: systemInstruction,
@@ -410,7 +398,7 @@ ${remindersText}
       throw new Error('Groq 與 Gemini 皆無法回應請求。');
     }
 
-    // E. 寫入歷史對話
+    // 寫入對話歷史
     const todayStr = new Date().toISOString().split('T')[0];
     const { data: todayRecord } = await supabase
       .from('daily_chat_history')
