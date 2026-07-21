@@ -9,6 +9,7 @@ import { createClient } from '@supabase/supabase-js';
 
 const Type = SchemaType;
 
+// 優先選用 SERVICE_ROLE_KEY 以獲取管理者權限
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -107,10 +108,11 @@ async function sendMessageWithRetry(chatSession: any, payload: any, maxRetries =
         error?.status === 503 ||
         error?.status === 429 ||
         String(error?.message).includes('503') ||
+        String(error?.message).includes('429') ||
         String(error?.message).includes('high demand');
 
       if (isTransientError && attempt < maxRetries) {
-        console.warn(`[Gemini API Warning] 流量過載 (${error?.status})，等待 ${delay}ms 後重試...`);
+        console.warn(`[Gemini API Warning] 流量限制或過載 (${error?.status})，等待 ${delay}ms 後重試...`);
         await new Promise((resolve) => setTimeout(resolve, delay));
         delay *= 2;
       } else {
@@ -189,7 +191,7 @@ export async function POST(req: Request) {
     const nowUtcStr = now.toISOString();
     const taiwanTimeStr = new Date(now.getTime() + 8 * 60 * 60 * 1000).toISOString().replace('Z', '+08:00');
 
-    // 4. 設定 System Prompt
+    // 4. System Prompt
     const systemInstruction = `你是一位貼心且專業的個人 AI 助理。
 當前 UTC 時間為：${nowUtcStr}
 當前台灣時間 (UTC+8) 為：${taiwanTimeStr}
@@ -207,13 +209,14 @@ ${remindersText}
 4. 呼叫工具後，你必須根據工具傳回的結果實話實說：
    - 若 success 為 false，必須如實告知使用者失敗原因，嚴禁謊報設定成功！
    - 若 success 為 true，請親切簡潔地回覆使用者。
-
 請嚴格遵守以下原則：
-5. 保持親切、簡潔且具效益的回答。
-6. 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
-7.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！`;
+1. 保持親切、簡潔且具效益的回答。
+2. 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
+3.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！   
+   `;
 
-    const candidateModels = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
+    // 調整模型選擇順序：改用高額度的 gemini-2.0-flash 與 gemini-1.5-flash
+    const candidateModels = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash'];
     let responseText = '';
     let lastError: any = null;
 
@@ -258,7 +261,7 @@ ${remindersText}
               .select();
 
             if (insertError || !insertedData || insertedData.length === 0) {
-              const errMsg = insertError ? `${insertError.message} (${insertError.code})` : '資料庫未傳回結果';
+              const errMsg = insertError ? `${insertError.message} (代碼: ${insertError.code})` : '資料庫未傳回結果';
               console.error('❌ [新增提醒寫入 DB 失敗]:', insertError);
               result = await sendMessageWithRetry(chat, [
                 {
