@@ -14,7 +14,6 @@ declare global {
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-// 🍪 雙重儲存機制 (Cookie + LocalStorage) 支援 PWA 跨頁與離線 Session
 const dualStorage = {
   getItem: (key: string): string | null => {
     if (typeof window === 'undefined') return null;
@@ -70,7 +69,6 @@ const isValidUUID = (id: string) => {
   return uuidRegex.test(id);
 };
 
-// 本地 datetime-local 輸入框時間轉換格式化函式
 const getLocalDateTimeString = (d: Date = new Date()) => {
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -80,19 +78,19 @@ const getLocalDateTimeString = (d: Date = new Date()) => {
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 };
 
-// 🔊 系統內建電子鬧鐘嗶嗶聲 (Base64 WAV)
 const BEEP_AUDIO_BASE64 =
   'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==';
 
-// 🌐 多國語言 (i18n) 字典對照表
 const i18n = {
   zh: {
     assistantName: '專屬助理',
     online: '在線中',
+    fontSizeSelect: '全域字體大小',
     fontSmall: '字體：小',
     fontMedium: '字體：中',
     fontLarge: '字體：大',
     inputPlaceholder: '對助理下達命令吧...',
+    voiceProcessing: '✨ 語音潤飾與校正中...',
     send: '發送',
     sending: '...',
     noMessages: '暫無對話紀錄，和助理聊聊天吧！',
@@ -117,7 +115,7 @@ const i18n = {
     imageModalTitle: '🎨 AI 圖片生成',
     imagePromptPlaceholder: '描述你想生成的圖片內容...',
     generateImage: '生成圖片',
-    generating: '生成中...',
+    generating: '正在繪製圖片中...',
     downloadImage: '📥 下載圖片',
     voiceNotSupported: '您的瀏覽器不支援語音識別功能',
     addReminder: '➕ 新增提醒 / 鬧鐘',
@@ -149,10 +147,12 @@ const i18n = {
   en: {
     assistantName: 'AI Assistant',
     online: 'Online',
+    fontSizeSelect: 'Global Font Size',
     fontSmall: 'Font: Small',
     fontMedium: 'Font: Medium',
     fontLarge: 'Font: Large',
     inputPlaceholder: 'Type your message...',
+    voiceProcessing: '✨ Polishing voice text...',
     send: 'Send',
     sending: '...',
     noMessages: 'No message history yet. Start chatting!',
@@ -177,7 +177,7 @@ const i18n = {
     imageModalTitle: '🎨 AI Image Generator',
     imagePromptPlaceholder: 'Describe the image you want to generate...',
     generateImage: 'Generate Image',
-    generating: 'Generating...',
+    generating: 'Generating image...',
     downloadImage: '📥 Download Image',
     voiceNotSupported: 'Voice recognition is not supported in this browser.',
     addReminder: '➕ Add Reminder / Alarm',
@@ -208,7 +208,7 @@ const i18n = {
   },
 };
 
-// 💬 長按可複製對話氣泡組件
+// 長按複製氣泡
 function MessageBubbleItem({
   msg,
   currentStyle,
@@ -232,7 +232,7 @@ function MessageBubbleItem({
       navigator.clipboard.writeText(msg.content);
       setCopied(true);
       if (typeof window !== 'undefined' && navigator.vibrate) {
-        navigator.vibrate(40); // 微感震動
+        navigator.vibrate(40);
       }
       setTimeout(() => setCopied(false), 2000);
     }
@@ -241,7 +241,7 @@ function MessageBubbleItem({
   const handleTouchStart = () => {
     timerRef.current = setTimeout(() => {
       copyToClipboard();
-    }, 500); // 長按 500ms 觸發
+    }, 500);
   };
 
   const handleTouchEnd = () => {
@@ -330,20 +330,21 @@ export default function Home() {
   const [fontSize, setFontSize] = useState<'small' | 'medium' | 'large'>('medium');
   const [lang, setLang] = useState<'zh' | 'en'>('zh');
 
-  // Modals 控制
+  // Modals
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
   const [showDislikeModal, setShowDislikeModal] = useState(false);
   const [showImageModal, setShowImageModal] = useState(false);
 
-  // 🎨 AI 圖片生成狀態
+  // 🎨 AI 圖片生成
   const [imagePrompt, setImagePrompt] = useState('');
   const [generatedImageUrl, setGeneratedImageUrl] = useState('');
   const [imageLoading, setImageLoading] = useState(false);
 
-  // 🎤 語音輸入狀態
+  // 🎤 語音輸入與 AI 潤飾狀態
   const [isListening, setIsListening] = useState(false);
+  const [isRefiningVoice, setIsRefiningVoice] = useState(false);
   const recognitionRef = useRef<any>(null);
 
   const [activeFeedbackMsgId, setActiveFeedbackMsgId] = useState('');
@@ -354,7 +355,7 @@ export default function Home() {
   const [editingInstructionId, setEditingInstructionId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
 
-  // ⏰ 提醒與鬧鐘狀態
+  // ⏰ 提醒與鬧鐘
   const [reminders, setReminders] = useState<any[]>([]);
   const [newReminderTitle, setNewReminderTitle] = useState('');
   const [newReminderTime, setNewReminderTime] = useState(getLocalDateTimeString());
@@ -363,7 +364,6 @@ export default function Home() {
   const [activeAlarm, setActiveAlarm] = useState<any | null>(null);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
 
-  // Refs
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const processingIdsRef = useRef<Set<string>>(new Set());
@@ -371,33 +371,43 @@ export default function Home() {
 
   const t = i18n[lang];
 
+  // 🌟 全域動態縮放樣式表 (適用於全介面：對話框、標題列、彈出視窗、選單、按鈕與標籤)
   const sizeStyles = {
     small: {
-      bubble: 'text-base p-2.5 px-4 rounded-2xl',
-      input: 'text-base py-2 px-4',
-      sendBtn: 'text-base px-4 py-2',
+      headerTitle: 'text-base font-bold',
+      bubble: 'text-sm p-2.5 px-3.5 rounded-2xl',
+      input: 'text-sm py-2 px-3',
+      sendBtn: 'text-sm px-3.5 py-1.5',
       feedbackBtn: 'text-xs mt-1 pl-1 space-x-2',
-      modalTitle: 'text-lg font-bold',
-      modalText: 'text-base',
-      modalBtn: 'text-sm py-2 px-4 w-24',
+      modalTitle: 'text-base font-bold',
+      modalText: 'text-xs',
+      modalBtn: 'text-xs py-1.5 px-3',
+      badge: 'text-[10px]',
+      settingItem: 'text-xs p-2.5',
     },
     medium: {
-      bubble: 'text-xl p-3 px-5 rounded-3xl',
-      input: 'text-xl py-2 px-4',
-      sendBtn: 'text-xl px-5 py-2',
+      headerTitle: 'text-lg font-bold',
+      bubble: 'text-lg p-3 px-5 rounded-3xl',
+      input: 'text-lg py-2 px-4',
+      sendBtn: 'text-lg px-5 py-2',
       feedbackBtn: 'text-sm mt-1.5 pl-1.5 space-x-3',
-      modalTitle: 'text-2xl font-bold',
-      modalText: 'text-xl',
-      modalBtn: 'text-base py-2.5 px-5 w-28',
+      modalTitle: 'text-xl font-bold',
+      modalText: 'text-base',
+      modalBtn: 'text-sm py-2 px-4',
+      badge: 'text-xs',
+      settingItem: 'text-sm p-3.5',
     },
     large: {
-      bubble: 'text-[26px] p-3 px-5 rounded-[1.8rem]',
-      input: 'text-[22px] py-1.5 px-4',
-      sendBtn: 'text-[22px] px-5 py-1.5',
-      feedbackBtn: 'text-base mt-1.5 pl-2 space-x-4',
+      headerTitle: 'text-2xl font-bold',
+      bubble: 'text-2xl p-4 px-6 rounded-[1.8rem]',
+      input: 'text-xl py-3 px-5',
+      sendBtn: 'text-xl px-6 py-2.5',
+      feedbackBtn: 'text-base mt-2 pl-2 space-x-4',
       modalTitle: 'text-2xl font-bold',
       modalText: 'text-lg',
-      modalBtn: 'text-base py-2 px-4 w-28',
+      modalBtn: 'text-base py-2.5 px-5',
+      badge: 'text-sm',
+      settingItem: 'text-base p-4',
     },
   };
 
@@ -411,7 +421,6 @@ export default function Home() {
     scrollToBottom();
   }, [messages]);
 
-  // 音效解鎖與 SW 註冊
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const audio = new Audio(BEEP_AUDIO_BASE64);
@@ -465,7 +474,6 @@ export default function Home() {
     }
   };
 
-  // ⏰ 核心提醒檢查邏輯 (支援亮屏即時與休眠喚醒自動補發)
   const checkAndTriggerReminders = async () => {
     if (!userId || reminders.length === 0) return;
 
@@ -543,7 +551,6 @@ export default function Home() {
     }
   };
 
-  // ⚡ 螢幕亮起與應用程式復甦事件監聽
   useEffect(() => {
     const interval = setInterval(checkAndTriggerReminders, 1000);
 
@@ -640,27 +647,6 @@ export default function Home() {
       setReminders((prev) => prev.filter((r) => r.id !== id));
     }
   };
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const metaTags = [
-      { name: 'apple-mobile-web-app-capable', content: 'yes' },
-      { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
-      { name: 'apple-mobile-web-app-title', content: '專屬 AI 助理' },
-      { name: 'mobile-web-app-capable', content: 'yes' },
-    ];
-
-    metaTags.forEach((tag) => {
-      let el = document.querySelector(`meta[name="${tag.name}"]`);
-      if (!el) {
-        el = document.createElement('meta');
-        el.setAttribute('name', tag.name);
-        document.head.appendChild(el);
-      }
-      el.setAttribute('content', tag.content);
-    });
-  }, []);
 
   useEffect(() => {
     if (!supabase) {
@@ -812,25 +798,6 @@ export default function Home() {
     localStorage.setItem('app_lang', l);
   };
 
-  useEffect(() => {
-    if (!userId || !isValidUUID(userId)) return;
-
-    fetch(`/api/history?userId=${userId}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.history) {
-          const formatted = data.history.map((h: any, index: number) => ({
-            id: `msg_${index}_${h.created_at || Date.now()}`,
-            role: h.role,
-            content: h.content,
-            imageUrl: h.imageUrl || null,
-          }));
-          setMessages(formatted);
-        }
-      })
-      .catch((err) => console.error('載入歷史訊息失敗:', err));
-  }, [userId]);
-
   const handleSendMessage = async () => {
     if (!input.trim() || loading || !isValidUUID(userId)) return;
     setLoading(true);
@@ -859,7 +826,7 @@ export default function Home() {
     }
   };
 
-  // 🎤 語音輸入切換
+  // 🎤 語音接收 + AI 即時潤飾語義
   const toggleVoiceInput = () => {
     if (typeof window === 'undefined') return;
 
@@ -878,19 +845,36 @@ export default function Home() {
       try {
         const recognition = new SpeechRecognition();
         recognition.continuous = false;
-        recognition.interimResults = true;
+        recognition.interimResults = false;
         recognition.lang = lang === 'en' ? 'en-US' : 'zh-TW';
 
-        recognition.onresult = (event: any) => {
-          const transcript = Array.from(event.results)
+        recognition.onresult = async (event: any) => {
+          const rawTranscript = Array.from(event.results)
             .map((result: any) => result[0].transcript)
             .join('');
-          setInput(transcript);
+
+          if (rawTranscript.trim()) {
+            setIsRefiningVoice(true);
+            try {
+              const res = await fetch('/api/refine-voice', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: rawTranscript, lang }),
+              });
+              const data = await res.json();
+              setInput(data.refinedText || rawTranscript);
+            } catch (err) {
+              setInput(rawTranscript);
+            } finally {
+              setIsRefiningVoice(false);
+            }
+          }
         };
 
         recognition.onerror = (event: any) => {
           console.error('語音辨識錯誤:', event.error);
           setIsListening(false);
+          setIsRefiningVoice(false);
         };
 
         recognition.onend = () => {
@@ -903,11 +887,12 @@ export default function Home() {
       } catch (err) {
         console.error('語音啟動失敗:', err);
         setIsListening(false);
+        setIsRefiningVoice(false);
       }
     }
   };
 
-  // 🎨 AI 圖片生成處理
+  // 🎨 AI 圖片生成處理 (修正連線失敗問題)
   const handleGenerateImage = async () => {
     if (!imagePrompt.trim() || imageLoading || !isValidUUID(userId)) return;
     setImageLoading(true);
@@ -924,7 +909,6 @@ export default function Home() {
       if (data.imageUrl) {
         setGeneratedImageUrl(data.imageUrl);
 
-        // 同步寫入當前對話紀錄
         const userMsg = {
           id: `msg_user_${Date.now()}`,
           role: 'user',
@@ -939,7 +923,7 @@ export default function Home() {
 
         setMessages((prev) => [...prev, userMsg, modelMsg]);
       } else {
-        alert(data.error || '圖片生成失敗，請再試一次');
+        alert(data.error || '圖片生成失敗，請稍後再試');
       }
     } catch (err) {
       console.error('圖片生成請求錯誤:', err);
@@ -1086,8 +1070,8 @@ export default function Home() {
             <div className="w-16 h-16 rounded-full bg-violet-600/20 flex items-center justify-center text-3xl border border-violet-500/30 mx-auto mb-4">
               🐱
             </div>
-            <h1 className="text-2xl font-extrabold text-white mb-2">{t.assistantName}</h1>
-            <p className="text-slate-400 text-sm mb-8 leading-relaxed">
+            <h1 className={`${currentStyle.modalTitle} text-white mb-2`}>{t.assistantName}</h1>
+            <p className={`${currentStyle.modalText} text-slate-400 mb-8 leading-relaxed`}>
               安全且無縫地同步您的大腦偏好設定
             </p>
             <div className="flex flex-col items-center justify-center space-y-4">
@@ -1104,79 +1088,42 @@ export default function Home() {
                 🐱
               </div>
               <div className="min-w-0">
-                <h1 className="font-bold text-lg leading-tight truncate">{t.assistantName}</h1>
-                <span className="text-xs text-emerald-300 flex items-center mt-0.5">● {t.online}</span>
+                <h1 className={`${currentStyle.headerTitle} leading-tight truncate`}>{t.assistantName}</h1>
+                <span className={`text-emerald-300 flex items-center mt-0.5 ${currentStyle.badge}`}>
+                  ● {t.online}
+                </span>
               </div>
             </div>
 
             <div className="flex items-center gap-2 flex-shrink-0">
-              {/* 中英文切換 */}
+              {/* 語言切換 */}
               <select
                 value={lang}
                 onChange={(e) => handleLangChange(e.target.value as 'zh' | 'en')}
-                className="bg-white/10 text-white border border-white/20 rounded-xl px-2 py-1.5 text-xs font-semibold focus:outline-none appearance-none cursor-pointer"
+                className={`bg-white/10 text-white border border-white/20 rounded-xl px-2 py-1.5 font-semibold focus:outline-none appearance-none cursor-pointer ${currentStyle.modalBtn}`}
               >
-                <option value="zh" className="bg-slate-800 text-white">
-                  繁中
-                </option>
-                <option value="en" className="bg-slate-800 text-white">
-                  EN
-                </option>
+                <option value="zh" className="bg-slate-800 text-white">繁中</option>
+                <option value="en" className="bg-slate-800 text-white">EN</option>
               </select>
 
-              {/* 字體大小切換 */}
-              <div className="relative">
-                <select
-                  value={fontSize}
-                  onChange={(e) =>
-                    handleFontSizeChange(e.target.value as 'small' | 'medium' | 'large')
-                  }
-                  className="bg-white/10 text-white border border-white/20 rounded-xl px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-white/50 appearance-none pr-7 cursor-pointer"
-                >
-                  <option value="small" className="bg-slate-800 text-white">
-                    {t.fontSmall}
-                  </option>
-                  <option value="medium" className="bg-slate-800 text-white">
-                    {t.fontMedium}
-                  </option>
-                  <option value="large" className="bg-slate-800 text-white">
-                    {t.fontLarge}
-                  </option>
-                </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-1.5 text-white/70">
-                  <svg className="fill-current h-3.5 w-3.5" viewBox="0 0 20 20">
-                    <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
-                  </svg>
-                </div>
-              </div>
-
-              {/* 設定齒輪按鈕 */}
+              {/* 設定選單按鈕 */}
               <button
                 onClick={() => setShowSettingsModal(true)}
                 className="text-white/80 hover:text-white active:scale-90 transition-all flex items-center justify-center bg-transparent border-0"
                 style={{ width: '38px', height: '38px' }}
                 title={t.settingsTitle}
               >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  className="w-7 h-7"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M11.078 2.25c-.288 0-.538.188-.612.466l-.5 1.865c-.172.643-.82 1.05-1.479.887l-1.865-.46a.625.625 0 00-.73.34l-.994 1.722a.625.625 0 00.16.782l1.503 1.155c.522.4.636 1.135.253 1.666l-.01.014c-.384.532-1.12.651-1.644.275l-1.502-1.155a.625.625 0 00-.782.16l-.994 1.722a.625.625 0 00.34.73l1.865.5c.643.172 1.05.82.887 1.479l-.46 1.865a.625.625 0 00.466.612h1.988c.288 0 .538-.188.612-.466l.5-1.865c.172-.643.82-1.05 1.479-.887l1.865.46c.264.066.545-.058.67-.297l.994-1.722a.625.625 0 00-.16-.782l-1.503-1.155c-.522-.4-.636-1.135-.253-1.666l.01-.014c.384-.532-1.12-.651 1.644-.275l1.502 1.155c.241.185.578.12.742-.11l.994-1.722a.625.625 0 00-.34-.73l-1.865-.5a1.25 1.25 0 01-.887-1.479l.46-1.865a.625.625 0 00-.466-.612h-1.988zM12 15a3 3 0 100-6 3 3 0 000 6z"
-                    clipRule="evenodd"
-                  />
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7">
+                  <path fillRule="evenodd" d="M11.078 2.25c-.288 0-.538.188-.612.466l-.5 1.865c-.172.643-.82 1.05-1.479.887l-1.865-.46a.625.625 0 00-.73.34l-.994 1.722a.625.625 0 00.16.782l1.503 1.155c.522.4.636 1.135.253 1.666l-.01.014c-.384.532-1.12.651-1.644.275l-1.502-1.155a.625.625 0 00-.782.16l-.994 1.722a.625.625 0 00.34.73l1.865.5c.643.172 1.05.82.887 1.479l-.46 1.865a.625.625 0 00.466.612h1.988c.288 0 .538-.188.612-.466l.5-1.865c.172-.643.82-1.05 1.479-.887l1.865.46c.264.066.545-.058.67-.297l.994-1.722a.625.625 0 00-.16-.782l-1.503-1.155c-.522-.4-.636-1.135-.253-1.666l.01-.014c.384-.532-1.12-.651 1.644-.275l1.502 1.155c.241.185.578.12.742-.11l.994-1.722a.625.625 0 00-.34-.73l-1.865-.5a1.25 1.25 0 01-.887-1.479l.46-1.865a.625.625 0 00-.466-.612h-1.988zM12 15a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
                 </svg>
               </button>
             </div>
           </header>
 
-          {/* 2. 聊天對話區 */}
+          {/* 2. 聊天區 */}
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
             {messages.length === 0 ? (
-              <div className="text-center text-slate-500 py-20 text-lg">{t.noMessages}</div>
+              <div className={`text-center text-slate-500 py-20 ${currentStyle.modalText}`}>{t.noMessages}</div>
             ) : (
               messages.map((msg) => (
                 <MessageBubbleItem
@@ -1193,9 +1140,8 @@ export default function Home() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* 3. 底部輸入與功能按鈕列 */}
+          {/* 3. 底部輸入欄 */}
           <div className="flex-shrink-0 w-full px-3 py-2 border-t border-slate-800 bg-slate-900/95 flex items-center gap-2 box-border pb-[calc(env(safe-area-inset-bottom)+12px)]">
-            {/* 🎨 AI 圖片生成按鈕 */}
             <button
               onClick={() => setShowImageModal(true)}
               className="p-2.5 bg-slate-800 hover:bg-slate-700 text-xl rounded-full border border-slate-700 active:scale-95 transition-all flex-shrink-0"
@@ -1204,30 +1150,31 @@ export default function Home() {
               🎨
             </button>
 
-            {/* 🎤 語音輸入按鈕 */}
+            {/* 🎤 語音按鈕與潤飾狀態 */}
             <button
               onClick={toggleVoiceInput}
+              disabled={isRefiningVoice}
               className={`p-2.5 text-xl rounded-full border active:scale-95 transition-all flex-shrink-0 ${
                 isListening
                   ? 'bg-rose-600 border-rose-500 text-white animate-pulse'
+                  : isRefiningVoice
+                  ? 'bg-amber-600 border-amber-500 text-white animate-spin'
                   : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-white'
               }`}
               title={isListening ? '點擊停止聆聽' : '點擊語音輸入'}
             >
-              {isListening ? '🎙️' : '🎤'}
+              {isListening ? '🎙️' : isRefiningVoice ? '⚙️' : '🎤'}
             </button>
 
-            {/* 文字輸入框 */}
             <input
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-              placeholder={isListening ? '正聆聽您的聲音...' : t.inputPlaceholder}
+              placeholder={isRefiningVoice ? t.voiceProcessing : isListening ? '正聆聽您的聲音...' : t.inputPlaceholder}
               className={`flex-1 w-0 bg-slate-800 text-white rounded-full border border-slate-700 focus:outline-none focus:border-violet-500 transition-all box-border ${currentStyle.input}`}
             />
 
-            {/* 發送按鈕 */}
             <button
               onClick={handleSendMessage}
               disabled={loading}
@@ -1244,15 +1191,10 @@ export default function Home() {
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-5 w-full max-w-md shadow-2xl space-y-4">
             <div className="flex justify-between items-center border-b border-slate-700 pb-3">
-              <h3 className="text-xl font-bold text-violet-400 flex items-center gap-2">
+              <h3 className={`${currentStyle.modalTitle} text-violet-400 flex items-center gap-2`}>
                 {t.imageModalTitle}
               </h3>
-              <button
-                onClick={() => setShowImageModal(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-full bg-slate-700/50"
-              >
-                ✕
-              </button>
+              <button onClick={() => setShowImageModal(false)} className="text-slate-400 hover:text-white p-1 rounded-full bg-slate-700/50">✕</button>
             </div>
 
             <textarea
@@ -1260,30 +1202,26 @@ export default function Home() {
               onChange={(e) => setImagePrompt(e.target.value)}
               placeholder={t.imagePromptPlaceholder}
               rows={3}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-violet-500 resize-none"
+              className={`w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white focus:outline-none focus:border-violet-500 resize-none ${currentStyle.modalText}`}
             />
 
             <button
               onClick={handleGenerateImage}
               disabled={imageLoading || !imagePrompt.trim()}
-              className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold py-3 rounded-xl transition-all shadow-lg active:scale-98"
+              className={`w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl transition-all shadow-lg active:scale-98 ${currentStyle.modalBtn}`}
             >
               {imageLoading ? t.generating : t.generateImage}
             </button>
 
             {generatedImageUrl && (
               <div className="mt-4 space-y-3">
-                <img
-                  src={generatedImageUrl}
-                  alt="Generated"
-                  className="rounded-xl border border-slate-700 w-full max-h-60 object-cover shadow-lg"
-                />
+                <img src={generatedImageUrl} alt="Generated" className="rounded-xl border border-slate-700 w-full max-h-60 object-cover shadow-lg" />
                 <a
                   href={generatedImageUrl}
                   download="ai-generated-image.png"
                   target="_blank"
                   rel="noreferrer"
-                  className="block text-center w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-xl transition-all text-sm"
+                  className={`block text-center w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition-all ${currentStyle.modalBtn}`}
                 >
                   {t.downloadImage}
                 </a>
@@ -1300,29 +1238,18 @@ export default function Home() {
             <div className="w-24 h-24 rounded-full bg-rose-500/20 border-2 border-rose-400 flex items-center justify-center text-5xl mx-auto animate-bounce">
               ⏰
             </div>
-            <h2 className="text-3xl font-black text-rose-300">{t.alarmTitle}</h2>
+            <h2 className={`${currentStyle.modalTitle} text-rose-300`}>{t.alarmTitle}</h2>
             <div className="bg-slate-900/80 border border-rose-500/30 p-6 rounded-2xl">
-              <p className="text-2xl font-bold text-white leading-relaxed break-words">
+              <p className={`${currentStyle.modalTitle} text-white leading-relaxed break-words`}>
                 {activeAlarm.title}
               </p>
-              <p className="text-sm text-slate-400 mt-2">
+              <p className={`${currentStyle.modalText} text-slate-400 mt-2`}>
                 設定時間：{new Date(activeAlarm.remind_at).toLocaleTimeString()}
-                {activeAlarm.repeat_type !== 'none' && (
-                  <span className="ml-2 text-rose-300">
-                    (
-                    {activeAlarm.repeat_type === 'daily'
-                      ? '每天'
-                      : activeAlarm.repeat_type === 'weekly'
-                      ? '每週'
-                      : '每月'}
-                    週期)
-                  </span>
-                )}
               </p>
             </div>
             <button
               onClick={handleStopAlarm}
-              className="w-full bg-rose-600 hover:bg-rose-500 text-white font-black text-xl py-4 rounded-full shadow-lg shadow-rose-600/30 transition-all active:scale-95"
+              className={`w-full bg-rose-600 hover:bg-rose-500 text-white font-black rounded-full shadow-lg transition-all active:scale-95 ${currentStyle.modalBtn}`}
             >
               {t.stopAlarm}
             </button>
@@ -1330,7 +1257,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* 主設定 Modal */}
+      {/* ⚙️ 主設定 Modal (整合統一字體切換) */}
       {showSettingsModal && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 z-40">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
@@ -1338,119 +1265,90 @@ export default function Home() {
               <h3 className={`${currentStyle.modalTitle} text-violet-400 flex items-center gap-2`}>
                 {t.settingsTitle}
               </h3>
-              <button
-                onClick={() => setShowSettingsModal(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-full bg-slate-700/50"
-              >
-                ✕
-              </button>
+              <button onClick={() => setShowSettingsModal(false)} className="text-slate-400 hover:text-white p-1 rounded-full bg-slate-700/50">✕</button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* 使用者資訊 */}
               <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-700/50 flex flex-col gap-3">
                 <div className="flex items-center gap-3">
                   {user?.user_metadata?.avatar_url ? (
-                    <img
-                      src={user.user_metadata.avatar_url}
-                      alt="avatar"
-                      className="w-12 h-12 rounded-full border border-violet-500/50"
-                    />
+                    <img src={user.user_metadata.avatar_url} alt="avatar" className="w-12 h-12 rounded-full border border-violet-500/50" />
                   ) : (
-                    <div className="w-12 h-12 rounded-full bg-violet-600/30 flex items-center justify-center text-xl font-bold border border-violet-500/30">
-                      👤
-                    </div>
+                    <div className="w-12 h-12 rounded-full bg-violet-600/30 flex items-center justify-center text-xl font-bold border border-violet-500/30">👤</div>
                   )}
                   <div className="min-w-0 flex-1">
-                    <p className="text-slate-200 font-bold truncate leading-snug">
-                      {user?.user_metadata?.full_name || user?.email?.split('@')[0] || '使用者'}
-                    </p>
-                    <p className="text-slate-400 text-xs truncate leading-normal">
-                      {user?.email}
-                    </p>
+                    <p className={`${currentStyle.modalText} text-slate-200 font-bold truncate`}>{user?.user_metadata?.full_name || user?.email?.split('@')[0]}</p>
+                    <p className={`${currentStyle.modalText} text-slate-400 text-xs truncate`}>{user?.email}</p>
                   </div>
                 </div>
-                <button
-                  onClick={handleLogout}
-                  className="w-full bg-rose-600/20 hover:bg-rose-600/35 border border-rose-500/30 text-rose-300 font-semibold py-2.5 rounded-lg active:scale-98 transition-all text-sm"
-                >
+                <button onClick={handleLogout} className={`w-full bg-rose-600/20 hover:bg-rose-600/35 border border-rose-500/30 text-rose-300 font-semibold rounded-lg ${currentStyle.modalBtn}`}>
                   {t.logout}
                 </button>
               </div>
 
-              <div className="pt-2">
+              {/* 🔤 統一全域字體選擇 */}
+              <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-700/50 flex items-center justify-between">
+                <span className={`${currentStyle.modalText} font-bold text-slate-200`}>{t.fontSizeSelect}</span>
+                <div className="flex gap-1 bg-slate-950 p-1 rounded-xl border border-slate-700">
+                  {(['small', 'medium', 'large'] as const).map((size) => (
+                    <button
+                      key={size}
+                      onClick={() => handleFontSizeChange(size)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        fontSize === size ? 'bg-violet-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {size === 'small' ? '小' : size === 'medium' ? '中' : '大'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 提醒中心 */}
+              <div>
                 <button
-                  onClick={() => {
-                    setShowSettingsModal(false);
-                    setShowReminderModal(true);
-                  }}
-                  className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg flex items-center justify-between transition-all active:scale-98"
+                  onClick={() => { setShowSettingsModal(false); setShowReminderModal(true); }}
+                  className={`w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-lg flex items-center justify-between transition-all ${currentStyle.modalBtn}`}
                 >
-                  <span className="flex items-center gap-2 text-base">
+                  <span className="flex items-center gap-2">
                     {t.reminderSettings}
                     {reminders.length > 0 && (
-                      <span className="bg-rose-500 text-white text-xs px-2 py-0.5 rounded-full font-black">
-                        {reminders.length}
-                      </span>
+                      <span className="bg-rose-500 text-white text-xs px-2 py-0.5 rounded-full font-black">{reminders.length}</span>
                     )}
                   </span>
-                  <span className="text-violet-200 text-xl">➔</span>
+                  <span>➔</span>
                 </button>
               </div>
 
-              <div className="space-y-3 pt-4 border-t border-slate-700/50">
-                <h4 className="text-base font-bold text-slate-300 flex items-center gap-1.5">
-                  {t.brainRules} ({instructions.length})
-                </h4>
+              {/* 記憶大腦 */}
+              <div className="space-y-3 pt-2">
+                <h4 className={`${currentStyle.modalText} font-bold text-slate-300`}>{t.brainRules} ({instructions.length})</h4>
                 <div className="space-y-3 max-h-[25vh] overflow-y-auto pr-1">
                   {instructions.length === 0 ? (
-                    <p className="text-slate-500 text-sm py-4 text-center">{t.noBrainRules}</p>
+                    <p className={`${currentStyle.modalText} text-slate-500 text-center`}>{t.noBrainRules}</p>
                   ) : (
                     instructions.map((inst) => (
-                      <div
-                        key={inst.id}
-                        className="bg-slate-900/40 border border-slate-700/80 rounded-xl p-3 flex flex-col gap-2"
-                      >
+                      <div key={inst.id} className="bg-slate-900/40 border border-slate-700/80 rounded-xl p-3 flex flex-col gap-2">
                         {editingInstructionId === inst.id ? (
                           <div className="flex flex-col gap-2">
                             <textarea
                               value={editingText}
                               onChange={(e) => setEditingText(e.target.value)}
-                              className="w-full bg-slate-950 border border-violet-500/50 rounded-lg p-2 text-white text-sm focus:outline-none resize-none"
+                              className={`w-full bg-slate-950 border border-violet-500/50 rounded-lg p-2 text-white focus:outline-none resize-none ${currentStyle.modalText}`}
                               rows={3}
                             />
-                            <div className="flex justify-end gap-2 text-xs">
-                              <button
-                                onClick={() => setEditingInstructionId(null)}
-                                className="bg-slate-700 text-slate-300 px-3 py-1.5 rounded-md"
-                              >
-                                {t.cancel}
-                              </button>
-                              <button
-                                onClick={() => handleSaveInstruction(inst.id)}
-                                className="bg-violet-600 text-white px-3 py-1.5 rounded-md"
-                              >
-                                {t.save}
-                              </button>
+                            <div className="flex justify-end gap-2">
+                              <button onClick={() => setEditingInstructionId(null)} className={`bg-slate-700 text-slate-300 rounded-md ${currentStyle.modalBtn}`}>{t.cancel}</button>
+                              <button onClick={() => handleSaveInstruction(inst.id)} className={`bg-violet-600 text-white rounded-md ${currentStyle.modalBtn}`}>{t.save}</button>
                             </div>
                           </div>
                         ) : (
                           <>
-                            <p className="text-slate-300 text-sm whitespace-pre-wrap leading-relaxed">
-                              {inst.instruction}
-                            </p>
+                            <p className={`${currentStyle.modalText} text-slate-300 whitespace-pre-wrap`}>{inst.instruction}</p>
                             <div className="flex justify-end gap-3 text-xs border-t border-slate-800/60 pt-2 text-slate-400">
-                              <button
-                                onClick={() => handleEditClick(inst.id, inst.instruction)}
-                                className="hover:text-violet-400"
-                              >
-                                {t.edit}
-                              </button>
-                              <button
-                                onClick={() => handleDeleteInstruction(inst.id)}
-                                className="hover:text-rose-400"
-                              >
-                                {t.delete}
-                              </button>
+                              <button onClick={() => handleEditClick(inst.id, inst.instruction)} className="hover:text-violet-400">{t.edit}</button>
+                              <button onClick={() => handleDeleteInstruction(inst.id)} className="hover:text-rose-400">{t.delete}</button>
                             </div>
                           </>
                         )}
@@ -1460,10 +1358,10 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-slate-700/50">
+              <div className="pt-2">
                 <button
                   onClick={() => setShowResetModal(true)}
-                  className="w-full bg-amber-600/10 hover:bg-amber-600/20 border border-amber-500/30 text-amber-300 font-semibold py-3 rounded-lg active:scale-98 transition-all text-sm"
+                  className={`w-full bg-amber-600/10 hover:bg-amber-600/20 border border-amber-500/30 text-amber-300 font-semibold rounded-lg ${currentStyle.modalBtn}`}
                 >
                   {t.clearHistory}
                 </button>
@@ -1471,10 +1369,7 @@ export default function Home() {
             </div>
 
             <div className="flex-shrink-0 p-4 border-t border-slate-700 bg-slate-900/20 flex justify-end">
-              <button
-                onClick={() => setShowSettingsModal(false)}
-                className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-2.5 rounded-full font-bold text-sm active:scale-95 transition-all"
-              >
+              <button onClick={() => setShowSettingsModal(false)} className={`bg-slate-700 hover:bg-slate-600 text-white rounded-full font-bold ${currentStyle.modalBtn}`}>
                 {t.done}
               </button>
             </div>
@@ -1482,132 +1377,72 @@ export default function Home() {
         </div>
       )}
 
-      {/* 獨立提醒設定 Modal */}
+      {/* 獨立提醒 Modal */}
       {showReminderModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-40">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
             <div className="flex-shrink-0 p-5 border-b border-slate-700 flex justify-between items-center bg-slate-800/50">
-              <h3 className="text-xl font-bold text-violet-400 flex items-center gap-2">
-                {t.reminderSettings}
-              </h3>
-              <button
-                onClick={() => setShowReminderModal(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-full bg-slate-700/50"
-              >
-                ✕
-              </button>
+              <h3 className={`${currentStyle.modalTitle} text-violet-400`}>{t.reminderSettings}</h3>
+              <button onClick={() => setShowReminderModal(false)} className="text-slate-400 hover:text-white p-1 rounded-full bg-slate-700/50">✕</button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
               {notificationPermission !== 'granted' && (
                 <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 flex items-center justify-between gap-2">
-                  <p className="text-xs text-amber-200">{t.enablePushPermission}</p>
-                  <button
-                    onClick={requestNotificationPermission}
-                    className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs px-3 py-1.5 rounded-lg flex-shrink-0"
-                  >
+                  <p className={`${currentStyle.modalText} text-amber-200`}>{t.enablePushPermission}</p>
+                  <button onClick={requestNotificationPermission} className={`bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg ${currentStyle.modalBtn}`}>
                     {t.enablePushBtn}
                   </button>
                 </div>
               )}
 
               <div className="bg-slate-900/60 border border-slate-700/60 rounded-xl p-4 space-y-3">
-                <h4 className="text-sm font-bold text-slate-200">{t.addReminder}</h4>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">提醒內容/備忘標題</label>
-                  <input
-                    type="text"
-                    placeholder={t.reminderTitlePlaceholder}
-                    value={newReminderTitle}
-                    onChange={(e) => setNewReminderTitle(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-violet-500"
-                  />
-                </div>
+                <h4 className={`${currentStyle.modalText} font-bold text-slate-200`}>{t.addReminder}</h4>
+                <input
+                  type="text"
+                  placeholder={t.reminderTitlePlaceholder}
+                  value={newReminderTitle}
+                  onChange={(e) => setNewReminderTitle(e.target.value)}
+                  className={`w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-white focus:outline-none ${currentStyle.modalText}`}
+                />
 
                 <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">{t.remindTime}</label>
-                    <input
-                      type="datetime-local"
-                      value={newReminderTime}
-                      onChange={(e) => setNewReminderTime(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-violet-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">{t.repeatCycle}</label>
-                    <select
-                      value={newReminderRepeat}
-                      onChange={(e) => setNewReminderRepeat(e.target.value as any)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-violet-500"
-                    >
-                      <option value="none">{t.noneRepeat}</option>
-                      <option value="daily">{t.dailyRepeat}</option>
-                      <option value="weekly">{t.weeklyRepeat}</option>
-                      <option value="monthly">{t.monthlyRepeat}</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">{t.reminderMode}</label>
+                  <input
+                    type="datetime-local"
+                    value={newReminderTime}
+                    onChange={(e) => setNewReminderTime(e.target.value)}
+                    className={`w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:outline-none ${currentStyle.modalText}`}
+                  />
                   <select
-                    value={newReminderType}
-                    onChange={(e) => setNewReminderType(e.target.value as any)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-violet-500"
+                    value={newReminderRepeat}
+                    onChange={(e) => setNewReminderRepeat(e.target.value as any)}
+                    className={`w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:outline-none ${currentStyle.modalText}`}
                   >
-                    <option value="both">{t.modeBoth}</option>
-                    <option value="alert">{t.modeAlert}</option>
-                    <option value="audio">{t.modeAudio}</option>
+                    <option value="none">{t.noneRepeat}</option>
+                    <option value="daily">{t.dailyRepeat}</option>
+                    <option value="weekly">{t.weeklyRepeat}</option>
+                    <option value="monthly">{t.monthlyRepeat}</option>
                   </select>
                 </div>
 
-                <button
-                  onClick={handleAddReminder}
-                  className="w-full bg-violet-600 hover:bg-violet-500 text-white py-2.5 rounded-lg font-bold text-sm transition-all shadow-md active:scale-98 mt-2"
-                >
+                <button onClick={handleAddReminder} className={`w-full bg-violet-600 hover:bg-violet-500 text-white rounded-lg font-bold ${currentStyle.modalBtn}`}>
                   {t.addReminderBtn}
                 </button>
               </div>
 
               <div className="space-y-3">
-                <h4 className="text-sm font-bold text-slate-300">
-                  {t.pendingReminders} ({reminders.length})
-                </h4>
+                <h4 className={`${currentStyle.modalText} font-bold text-slate-300`}>{t.pendingReminders} ({reminders.length})</h4>
                 <div className="space-y-2 max-h-[30vh] overflow-y-auto pr-1">
                   {reminders.length === 0 ? (
-                    <p className="text-slate-500 text-xs py-4 text-center">{t.noReminders}</p>
+                    <p className={`${currentStyle.modalText} text-slate-500 text-center`}>{t.noReminders}</p>
                   ) : (
                     reminders.map((r) => (
-                      <div
-                        key={r.id}
-                        className="bg-slate-900/40 border border-slate-700/60 rounded-xl p-3.5 flex justify-between items-center gap-2"
-                      >
+                      <div key={r.id} className="bg-slate-900/40 border border-slate-700/60 rounded-xl p-3.5 flex justify-between items-center gap-2">
                         <div className="min-w-0">
-                          <p className="text-slate-100 text-sm font-bold truncate">{r.title}</p>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-slate-400 text-xs">
-                              ⏰ {new Date(r.remind_at).toLocaleString()}
-                            </span>
-                            {r.repeat_type !== 'none' && (
-                              <span className="bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] px-2 py-0.5 rounded-full font-semibold">
-                                🔄{' '}
-                                {r.repeat_type === 'daily'
-                                  ? '每天'
-                                  : r.repeat_type === 'weekly'
-                                  ? '每週'
-                                  : '每月'}
-                              </span>
-                            )}
-                          </div>
+                          <p className={`${currentStyle.modalText} text-slate-100 font-bold truncate`}>{r.title}</p>
+                          <span className="text-slate-400 text-xs">⏰ {new Date(r.remind_at).toLocaleString()}</span>
                         </div>
-                        <button
-                          onClick={() => handleDeleteReminder(r.id)}
-                          className="text-rose-400 hover:text-rose-300 p-1.5 flex-shrink-0"
-                          title="刪除提醒"
-                        >
-                          🗑️
-                        </button>
+                        <button onClick={() => handleDeleteReminder(r.id)} className="text-rose-400 p-1.5">🗑️</button>
                       </div>
                     ))
                   )}
@@ -1616,10 +1451,7 @@ export default function Home() {
             </div>
 
             <div className="flex-shrink-0 p-4 border-t border-slate-700 bg-slate-900/20 flex justify-end">
-              <button
-                onClick={() => setShowReminderModal(false)}
-                className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-2 rounded-full font-bold text-sm transition-all"
-              >
+              <button onClick={() => setShowReminderModal(false)} className={`bg-slate-700 hover:bg-slate-600 text-white rounded-full font-bold ${currentStyle.modalBtn}`}>
                 {t.close}
               </button>
             </div>
@@ -1627,25 +1459,15 @@ export default function Home() {
         </div>
       )}
 
-      {/* 清空對話確認 Modal */}
+      {/* 清空對話 Modal */}
       {showResetModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
             <h3 className={`${currentStyle.modalTitle} text-white mb-3`}>{t.resetConfirmTitle}</h3>
             <p className={`${currentStyle.modalText} text-slate-300 mb-6`}>{t.resetConfirmMsg}</p>
             <div className="flex space-x-3 justify-center">
-              <button
-                onClick={() => setShowResetModal(false)}
-                className={`bg-slate-700 text-slate-200 rounded-full font-semibold ${currentStyle.modalBtn}`}
-              >
-                {t.cancel}
-              </button>
-              <button
-                onClick={confirmResetHistory}
-                className={`bg-rose-600 text-white rounded-full font-bold ${currentStyle.modalBtn}`}
-              >
-                {t.confirmClear}
-              </button>
+              <button onClick={() => setShowResetModal(false)} className={`bg-slate-700 text-slate-200 rounded-full font-semibold ${currentStyle.modalBtn}`}>{t.cancel}</button>
+              <button onClick={confirmResetHistory} className={`bg-rose-600 text-white rounded-full font-bold ${currentStyle.modalBtn}`}>{t.confirmClear}</button>
             </div>
           </div>
         </div>
@@ -1655,30 +1477,18 @@ export default function Home() {
       {showDislikeModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
-            <h3 className={`${currentStyle.modalTitle} text-rose-400 mb-2`}>
-              {t.dislikeModalTitle}
-            </h3>
-            <p className="text-slate-400 text-sm mb-4">{t.dislikePrompt}</p>
+            <h3 className={`${currentStyle.modalTitle} text-rose-400 mb-2`}>{t.dislikeModalTitle}</h3>
+            <p className={`${currentStyle.modalText} text-slate-400 mb-4`}>{t.dislikePrompt}</p>
             <textarea
               value={dislikeCorrection}
               onChange={(e) => setDislikeCorrection(e.target.value)}
               placeholder={t.dislikePlaceholder}
               rows={3}
-              className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-base focus:outline-none focus:border-violet-500 mb-5 resize-none"
+              className={`w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white focus:outline-none focus:border-violet-500 mb-5 resize-none ${currentStyle.modalText}`}
             />
             <div className="flex space-x-3 justify-center">
-              <button
-                onClick={() => setShowDislikeModal(false)}
-                className={`bg-slate-700 text-slate-200 rounded-full font-semibold ${currentStyle.modalBtn}`}
-              >
-                {t.cancel}
-              </button>
-              <button
-                onClick={confirmDislikeFeedback}
-                className={`bg-rose-600 text-white rounded-full font-bold ${currentStyle.modalBtn}`}
-              >
-                {t.submitCorrection}
-              </button>
+              <button onClick={() => setShowDislikeModal(false)} className={`bg-slate-700 text-slate-200 rounded-full font-semibold ${currentStyle.modalBtn}`}>{t.cancel}</button>
+              <button onClick={confirmDislikeFeedback} className={`bg-rose-600 text-white rounded-full font-bold ${currentStyle.modalBtn}`}>{t.submitCorrection}</button>
             </div>
           </div>
         </div>
