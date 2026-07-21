@@ -82,6 +82,103 @@ const getLocalDateTimeString = (d: Date = new Date()) => {
 const BEEP_AUDIO_BASE64 =
   'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==';
 
+// 💬 長按可複製對話氣泡組件
+function MessageBubbleItem({
+  msg,
+  currentStyle,
+  feedbackStatus,
+  handleLike,
+  handleDislikeClick,
+}: {
+  msg: any;
+  currentStyle: any;
+  feedbackStatus: Record<string, 'like' | 'dislike'>;
+  handleLike: (msgId: string, content: string) => void;
+  handleDislikeClick: (msgId: string, content: string) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const copyToClipboard = () => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(msg.content);
+      setCopied(true);
+      if (typeof window !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate(40); // 微感震動
+      }
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleTouchStart = () => {
+    timerRef.current = setTimeout(() => {
+      copyToClipboard();
+    }, 500); // 長按 500ms 觸發
+  };
+
+  const handleTouchEnd = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  return (
+    <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+      <div className="flex flex-col max-w-[85%] space-y-1 relative group">
+        {/* 長按複製成功 Toast 提示 */}
+        {copied && (
+          <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-emerald-400 border border-emerald-500/40 text-xs px-3 py-1 rounded-full shadow-xl z-20 whitespace-nowrap animate-bounce font-medium">
+            ✓ 已複製對話內容
+          </div>
+        )}
+
+        <div
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+          onTouchMove={handleTouchEnd}
+          className={`shadow-md transition-all duration-200 break-words select-text active:opacity-90 ${
+            currentStyle.bubble
+          } ${
+            msg.role === 'user'
+              ? 'bg-violet-600 text-white rounded-tr-none'
+              : 'bg-slate-800 text-slate-100 rounded-tl-none border border-slate-700'
+          }`}
+          title="長按可複製文字"
+        >
+          {msg.content}
+        </div>
+
+        {msg.role === 'model' && (
+          <div className={`flex items-center text-slate-400 font-medium ${currentStyle.feedbackBtn}`}>
+            {!feedbackStatus[msg.id] ? (
+              <>
+                <button
+                  onClick={() => handleLike(msg.id, msg.content)}
+                  className="hover:text-emerald-400 active:scale-95 transition-all flex items-center gap-1"
+                >
+                  👍 滿意
+                </button>
+                <span className="text-slate-600">|</span>
+                <button
+                  onClick={() => handleDislikeClick(msg.id, msg.content)}
+                  className="hover:text-rose-400 active:scale-95 transition-all flex items-center gap-1"
+                >
+                  👎 不滿意
+                </button>
+              </>
+            ) : feedbackStatus[msg.id] === 'like' ? (
+              <span className="text-emerald-400 flex items-center gap-1">💚 已記錄滿意回饋</span>
+            ) : (
+              <span className="text-rose-400 flex items-center gap-1">💔 已記錄不滿意回饋</span>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -120,7 +217,7 @@ export default function Home() {
   // Refs
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const processingIdsRef = useRef<Set<string>>(new Set()); // 避免重複觸發鎖定
+  const processingIdsRef = useRef<Set<string>>(new Set());
   const audioUnlockedRef = useRef<boolean>(false);
 
   const sizeStyles = {
@@ -175,14 +272,12 @@ export default function Home() {
         setNotificationPermission(Notification.permission);
       }
 
-      // 註冊 Service Worker 實現背景推播
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker
           .register('/sw.js')
           .catch((err) => console.error('SW 註冊失敗:', err));
       }
 
-      // 🔓 第一次點擊全螢幕時解鎖音效自動播放權限
       const unlockAudio = () => {
         if (!audioUnlockedRef.current && audioRef.current) {
           audioRef.current
@@ -210,7 +305,6 @@ export default function Home() {
     }
   }, []);
 
-  // 請求 Notification 權限
   const requestNotificationPermission = async () => {
     if ('Notification' in window) {
       const perm = await Notification.requestPermission();
@@ -221,7 +315,6 @@ export default function Home() {
     }
   };
 
-  // ⏰ 核心：鬧鐘/提醒觸發邏輯（支援週期計算與背景推播）
   const checkAndTriggerReminders = async () => {
     if (!userId || reminders.length === 0) return;
 
@@ -238,7 +331,6 @@ export default function Home() {
     }
   };
 
-  // 處理已觸發提醒 (計算下一次週期時間)
   const processTriggeredReminder = async (reminder: any) => {
     if (!supabase || !isValidUUID(userId)) return;
 
@@ -257,7 +349,6 @@ export default function Home() {
       nextRemindAt = current.toISOString();
     }
 
-    // 更新資料庫
     if (nextRemindAt) {
       await supabase
         .from('user_reminders')
@@ -270,10 +361,7 @@ export default function Home() {
         .eq('id', reminder.id);
     }
 
-    // 重新載入提醒
     fetchReminders(userId);
-
-    // 執行前端視覺/聽覺提醒
     setActiveAlarm(reminder);
 
     if (reminder.reminder_type === 'audio' || reminder.reminder_type === 'both') {
@@ -283,7 +371,6 @@ export default function Home() {
       }
     }
 
-    // 背景系統層級推播
     if (Notification.permission === 'granted') {
       if (navigator.serviceWorker && navigator.serviceWorker.ready) {
         navigator.serviceWorker.ready.then((reg) => {
@@ -300,13 +387,11 @@ export default function Home() {
       }
     }
 
-    // 觸發裝置震動回饋
     if (typeof window !== 'undefined' && window.navigator.vibrate) {
       window.navigator.vibrate([500, 250, 500, 250, 500]);
     }
   };
 
-  // 每秒檢查 + 畫面喚醒 (visibilitychange) 自動檢測
   useEffect(() => {
     const interval = setInterval(checkAndTriggerReminders, 1000);
 
@@ -324,7 +409,6 @@ export default function Home() {
     };
   }, [reminders, userId]);
 
-  // 停止鬧鐘
   const handleStopAlarm = () => {
     if (audioRef.current) {
       audioRef.current.pause();
@@ -333,7 +417,6 @@ export default function Home() {
     setActiveAlarm(null);
   };
 
-  // 獲取 reminders 列表
   const fetchReminders = async (uid: string) => {
     if (!uid || !isValidUUID(uid) || !supabase) return;
     const { data, error } = await supabase
@@ -348,7 +431,6 @@ export default function Home() {
     }
   };
 
-  // 手動新增提醒事項
   const handleAddReminder = async () => {
     if (!newReminderTitle.trim() || !newReminderTime || !supabase || !isValidUUID(userId)) {
       alert('請填寫完整提醒內容與時間！');
@@ -390,7 +472,6 @@ export default function Home() {
     }
   };
 
-  // 刪除提醒事項
   const handleDeleteReminder = async (id: string) => {
     if (!supabase || !isValidUUID(userId)) return;
     const { error } = await supabase
@@ -404,7 +485,6 @@ export default function Home() {
     }
   };
 
-  // PWA Meta 設定與初始化 Auth
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -603,7 +683,6 @@ export default function Home() {
         const replyId = `msg_model_${Date.now()}`;
         setMessages((prev) => [...prev, { id: replyId, role: 'model', content: data.reply }]);
 
-        // 重新拉取最新提醒事項 (若 AI 幫忙設定了鬧鐘)
         fetchReminders(userId);
       }
     } catch (err) {
@@ -824,7 +903,7 @@ export default function Home() {
             </button>
           </header>
 
-          {/* 2. 聊天對話區 */}
+          {/* 2. 聊天對話區（嵌入長按複製功能） */}
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
             {messages.length === 0 ? (
               <div className="text-center text-slate-500 py-20 text-lg">
@@ -832,56 +911,14 @@ export default function Home() {
               </div>
             ) : (
               messages.map((msg) => (
-                <div
+                <MessageBubbleItem
                   key={msg.id}
-                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div className="flex flex-col max-w-[85%] space-y-1">
-                    <div
-                      className={`shadow-md transition-all duration-200 break-words ${
-                        currentStyle.bubble
-                      } ${
-                        msg.role === 'user'
-                          ? 'bg-violet-600 text-white rounded-tr-none'
-                          : 'bg-slate-800 text-slate-100 rounded-tl-none border border-slate-700'
-                      }`}
-                    >
-                      {msg.content}
-                    </div>
-
-                    {msg.role === 'model' && (
-                      <div
-                        className={`flex items-center text-slate-400 font-medium ${currentStyle.feedbackBtn}`}
-                      >
-                        {!feedbackStatus[msg.id] ? (
-                          <>
-                            <button
-                              onClick={() => handleLike(msg.id, msg.content)}
-                              className="hover:text-emerald-400 active:scale-95 transition-all flex items-center gap-1"
-                            >
-                              👍 滿意
-                            </button>
-                            <span className="text-slate-600">|</span>
-                            <button
-                              onClick={() => handleDislikeClick(msg.id, msg.content)}
-                              className="hover:text-rose-400 active:scale-95 transition-all flex items-center gap-1"
-                            >
-                              👎 不滿意
-                            </button>
-                          </>
-                        ) : feedbackStatus[msg.id] === 'like' ? (
-                          <span className="text-emerald-400 flex items-center gap-1">
-                            💚 已記錄滿意回饋
-                          </span>
-                        ) : (
-                          <span className="text-rose-400 flex items-center gap-1">
-                            💔 已記錄不滿意回饋
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
+                  msg={msg}
+                  currentStyle={currentStyle}
+                  feedbackStatus={feedbackStatus}
+                  handleLike={handleLike}
+                  handleDislikeClick={handleDislikeClick}
+                />
               ))
             )}
             <div ref={messagesEndRef} />
@@ -1001,7 +1038,7 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* 獨立按鈕：跳出獨立提醒 Modal */}
+              {/* 跳出獨立提醒 Modal */}
               <div className="pt-2">
                 <button
                   onClick={() => {
@@ -1108,7 +1145,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* 🌟 獨立跳出的「提醒與鬧鐘設定 Modal」 */}
+      {/* 獨立跳出的提醒 Modal */}
       {showReminderModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-40">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
@@ -1133,7 +1170,6 @@ export default function Home() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {/* 背景推播權限開啟引導 */}
               {notificationPermission !== 'granted' && (
                 <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 flex items-center justify-between gap-2">
                   <p className="text-xs text-amber-200">
