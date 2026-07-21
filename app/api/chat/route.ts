@@ -7,16 +7,14 @@ import {
 } from '@google/generative-ai';
 import { createClient } from '@supabase/supabase-js';
 
-// 🛠️ 將 SchemaType 映射為 Type
 const Type = SchemaType;
 
-// 初始化 Supabase Client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// 🛠️ Function Calling 工具定義
+// 🛠️ Function Calling 工具宣告
 const functionDeclarations: FunctionDeclaration[] = [
   {
     name: 'set_reminder',
@@ -30,7 +28,7 @@ const functionDeclarations: FunctionDeclaration[] = [
         },
         remind_at: {
           type: Type.STRING,
-          description: '提醒時間 (必須為標準 ISO 8601 時間字串，例如: 2026-07-20T15:30:00.000Z)',
+          description: '提醒時間 (標準 ISO 8601 時間字串，例如: 2026-07-21T15:30:00.000Z)',
         },
         repeat_type: {
           type: Type.STRING,
@@ -76,9 +74,6 @@ const functionDeclarations: FunctionDeclaration[] = [
 
 const tools: Tool[] = [{ functionDeclarations }];
 
-/**
- * 🔄 自動重試輔助函式 (處理 503 / 429 暫時性過載)
- */
 async function sendMessageWithRetry(chatSession: any, payload: any, maxRetries = 3, initialDelay = 1000) {
   let delay = initialDelay;
 
@@ -93,7 +88,7 @@ async function sendMessageWithRetry(chatSession: any, payload: any, maxRetries =
         String(error?.message).includes('high demand');
 
       if (isTransientError && attempt < maxRetries) {
-        console.warn(`[Gemini API Warning] 遇到流量過載 (${error?.status})，等待 ${delay}ms 後重新嘗試...`);
+        console.warn(`[Gemini API Warning] 流量過載 (${error?.status})，等待 ${delay}ms 後重試...`);
         await new Promise((resolve) => setTimeout(resolve, delay));
         delay *= 2;
       } else {
@@ -108,7 +103,7 @@ export async function POST(req: Request) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
-        { error: '系統未設定 GEMINI_API_KEY，請至 Vercel 設定 Environment Variables。' },
+        { error: '系統未設定 GEMINI_API_KEY 環境變數。' },
         { status: 500 }
       );
     }
@@ -122,7 +117,7 @@ export async function POST(req: Request) {
     const cleanUserId = String(userId).trim();
     const genAI = new GoogleGenerativeAI(apiKey);
 
-    // 1. 讀取使用者的記憶與偏好規則 (user_instructions)
+    // 1. 讀取記憶規則
     const { data: instructionsData } = await supabase
       .from('user_instructions')
       .select('instruction')
@@ -130,22 +125,22 @@ export async function POST(req: Request) {
 
     const userRules = instructionsData?.map((item) => item.instruction).join('\n') || '';
 
-    // 2. 讀取使用者未觸發的提醒事項
-    const { data: activeReminders, error: fetchRemindersErr } = await supabase
+    // 2. 讀取未完成提醒
+    const { data: activeReminders, error: fetchErr } = await supabase
       .from('user_reminders')
       .select('id, title, remind_at, repeat_type')
       .eq('user_id', cleanUserId)
       .eq('is_triggered', false);
 
-    if (fetchRemindersErr) {
-      console.error('⚠️ [查詢 user_reminders 失敗]:', fetchRemindersErr);
+    if (fetchErr) {
+      console.error('⚠️ [讀取 user_reminders 失敗]:', fetchErr);
     }
 
     const remindersText = activeReminders && activeReminders.length > 0
       ? activeReminders.map((r) => `- [ID: ${r.id}] 標題: "${r.title}" (預定時間: ${r.remind_at}, 重複: ${r.repeat_type || 'none'})`).join('\n')
       : '目前無任何未完成的提醒事項。';
 
-    // 3. 讀取 daily_chat_history 近期 7 天對話紀錄
+    // 3. 讀取對話紀錄
     const { data: dailyRecords } = await supabase
       .from('daily_chat_history')
       .select('messages')
@@ -168,9 +163,15 @@ export async function POST(req: Request) {
       parts: [{ text: item.content || '' }],
     }));
 
-    // 4. 設定系統 Prompt
+    // 時區時間處理
+    const now = new Date();
+    const nowUtcStr = now.toISOString();
+    const taiwanTimeStr = new Date(now.getTime() + 8 * 60 * 60 * 1000).toISOString().replace('Z', '+08:00');
+
+    // 4. 設定 System Prompt
     const systemInstruction = `你是一位貼心且專業的個人 AI 助理。
-當前系統 UTC 時間為：${new Date().toISOString()}。
+當前 UTC 時間為：${nowUtcStr}
+當前台灣時間 (UTC+8) 為：${taiwanTimeStr}
 
 使用者設定的個人習慣與大腦規則：
 ${userRules ? userRules : '目前尚無特殊偏好設定。'}
@@ -178,23 +179,23 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
 使用者目前在資料庫中生效的未完成提醒事項：
 ${remindersText}
 
-【極重要原則】：
-1. 當使用者要求新增「提醒」、「鬧鐘」或「叫我做某事」時，你必須呼叫 set_reminder 工具，絕對不能只用文字回答「已設定完成」。
-2. 當使用者要求「取消」、「刪除」提醒事項或鬧鐘時，你必須呼叫 cancel_reminder 工具，絕對不能回答「無法取消」。
-3. 當使用者要求「記住...」、「以後請...」時，你必須呼叫 save_instruction 工具。
+【時間推算與工具呼叫規則】：
+1. 當使用者要求新增「提醒」、「鬧鐘」或「叫我做某事」時，請務必根據【台灣時間】計算目標時間，並轉換為 ISO 8601 UTC 時間字串傳入 set_reminder 的 remind_at 參數，然後呼叫 set_reminder。
+2. 當使用者要求「取消」、「刪除」提醒事項或鬧鐘時，必須呼叫 cancel_reminder 工具。
+3. 當使用者要求「記住...」、「以後請...」時，必須呼叫 save_instruction 工具。
 4. 呼叫工具後，你必須根據工具傳回的結果實話實說：
-   - 若 success 為 false，你必須如實告知使用者操作失敗及原因，絕對不允許在失敗時回答「已預約成功」或「已刪除」！
+   - 若 success 為 false，必須如實告知使用者失敗原因，嚴禁謊報設定成功！
    - 若 success 為 true，請親切簡潔地回覆使用者。
-5. 保持親切、簡潔且具效益的回答。
-6. 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
-7.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！`;
 
-    // 5. 定義模型嘗試清單
+請嚴格遵守以下原則：
+1. 保持親切、簡潔且具效益的回答。
+2. 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
+3.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！`;
+
     const candidateModels = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
     let responseText = '';
     let lastError: any = null;
 
-    // 6. 嘗試與模型互動
     for (const modelName of candidateModels) {
       try {
         const model = genAI.getGenerativeModel({
@@ -209,17 +210,19 @@ ${remindersText}
         let response = await result.response;
         let functionCalls = response.functionCalls();
 
-        // 7. 處理 Function Calling
         if (functionCalls && functionCalls.length > 0) {
           const call = functionCalls[0];
           const { name, args } = call;
 
           if (name === 'set_reminder') {
-            const { title, remind_at, repeat_type, reminder_type } = args as any;
+            const rawTitle = args?.title;
+            const rawRemindAt = args?.remind_at || (args as any)?.remindAt;
+            const repeatType = args?.repeat_type || (args as any)?.repeatType || 'none';
+            const reminderType = args?.reminder_type || (args as any)?.reminderType || 'both';
 
             let validRemindAt = new Date().toISOString();
-            if (remind_at) {
-              const parsedDate = new Date(remind_at);
+            if (rawRemindAt) {
+              const parsedDate = new Date(rawRemindAt);
               if (!isNaN(parsedDate.getTime())) {
                 validRemindAt = parsedDate.toISOString();
               }
@@ -230,10 +233,10 @@ ${remindersText}
               .insert([
                 {
                   user_id: cleanUserId,
-                  title: title,
+                  title: String(rawTitle).trim(),
                   remind_at: validRemindAt,
-                  repeat_type: repeat_type || 'none',
-                  reminder_type: reminder_type || 'both',
+                  repeat_type: repeatType,
+                  reminder_type: reminderType,
                   is_triggered: false,
                 },
               ])
@@ -241,7 +244,7 @@ ${remindersText}
 
             if (insertError || !insertedData || insertedData.length === 0) {
               const errMsg = insertError ? insertError.message : '資料庫未傳回寫入結果';
-              console.error('❌ [新增提醒失敗]:', insertError);
+              console.error('❌ [新增提醒寫入 DB 失敗]:', insertError);
               result = await sendMessageWithRetry(chat, [
                 {
                   functionResponse: {
@@ -255,7 +258,7 @@ ${remindersText}
                 {
                   functionResponse: {
                     name: 'set_reminder',
-                    response: { success: true, message: `已成功在資料庫中寫入提醒：${title}` },
+                    response: { success: true, message: `已成功在資料庫寫入提醒：${rawTitle}` },
                   },
                 },
               ]);
@@ -263,7 +266,7 @@ ${remindersText}
             responseText = (await result.response).text();
 
           } else if (name === 'cancel_reminder') {
-            const { keyword } = args as any;
+            const keyword = args?.keyword;
             let deleteQuery = supabase.from('user_reminders').delete().eq('user_id', cleanUserId);
 
             const searchKw = String(keyword || '').trim();
@@ -290,7 +293,7 @@ ${remindersText}
                   {
                     functionResponse: {
                       name: 'cancel_reminder',
-                      response: { success: true, message: `已成功為您從資料庫刪除 ${count} 筆符合 "${searchKw}" 的提醒` },
+                      response: { success: true, message: `已成功從資料庫刪除 ${count} 筆提醒` },
                     },
                   },
                 ]);
@@ -299,7 +302,7 @@ ${remindersText}
                   {
                     functionResponse: {
                       name: 'cancel_reminder',
-                      response: { success: false, error: `資料庫中完全找不到包含 "${searchKw}" 的未完成提醒` },
+                      response: { success: false, error: `資料庫中未找到與 "${searchKw}" 相符的未完成提醒` },
                     },
                   },
                 ]);
@@ -350,7 +353,7 @@ ${remindersText}
         break;
       } catch (err: any) {
         lastError = err;
-        console.warn(`[Gemini API Error] 模型 ${modelName} 失敗，嘗試備援模型... 錯誤:`, err?.message);
+        console.warn(`[Gemini API Error] 模型 ${modelName} 失敗，嘗試備援... 錯誤:`, err?.message);
       }
     }
 
@@ -358,7 +361,7 @@ ${remindersText}
       throw lastError;
     }
 
-    // 8. 追加寫入 daily_chat_history
+    // 5. 寫入歷史對話
     const todayStr = new Date().toISOString().split('T')[0];
 
     const { data: todayRecord } = await supabase
@@ -368,8 +371,7 @@ ${remindersText}
       .eq('chat_date', todayStr)
       .maybeSingle();
 
-    const rawMessages = todayRecord?.messages;
-    const currentMessages = Array.isArray(rawMessages) ? rawMessages : [];
+    const currentMessages = Array.isArray(todayRecord?.messages) ? todayRecord.messages : [];
 
     const updatedMessages = [
       ...currentMessages,
@@ -377,7 +379,7 @@ ${remindersText}
       { role: 'model', content: responseText, timestamp: new Date().toISOString() },
     ];
 
-    const { error: upsertError } = await supabase
+    await supabase
       .from('daily_chat_history')
       .upsert(
         {
@@ -389,21 +391,9 @@ ${remindersText}
         { onConflict: 'user_id,chat_date' }
       );
 
-    if (upsertError) {
-      console.error('寫入 daily_chat_history 失敗:', upsertError);
-    }
-
     return NextResponse.json({ reply: responseText });
   } catch (err: any) {
     console.error('Chat API 錯誤:', err);
-
-    if (err?.status === 503 || String(err?.message).includes('503')) {
-      return NextResponse.json(
-        { error: 'Google AI 服務目前流量過高，請稍後再試。' },
-        { status: 503 }
-      );
-    }
-
     return NextResponse.json(
       { error: '伺服器處理失敗', details: err?.message || String(err) },
       { status: 500 }
