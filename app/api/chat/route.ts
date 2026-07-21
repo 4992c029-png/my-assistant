@@ -14,23 +14,27 @@ const supabaseKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-function normalizeToISOString(input: any): string | null {
+function safeToISOString(input: any): string | null {
   if (!input) return null;
-  let str = String(input).trim();
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(str)) {
-    str += ':00';
+  try {
+    let str = String(input).trim();
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(str)) {
+      str += ':00';
+    }
+    const d = new Date(str);
+    if (isNaN(d.getTime())) return null;
+    return d.toISOString();
+  } catch (e) {
+    return null;
   }
-  const d = new Date(str);
-  if (isNaN(d.getTime())) return null;
-  return d.toISOString();
 }
 
-function normalizeUserId(userId: any): string {
-  if (!userId) return '';
-  if (typeof userId === 'object') {
-    return String(userId.id || userId.userId || userId.sub || '').trim();
+function cleanUserId(rawId: any): string {
+  if (!rawId) return '';
+  if (typeof rawId === 'object') {
+    return String(rawId.id || rawId.userId || rawId.sub || rawId.email || '').trim();
   }
-  return String(userId).trim();
+  return String(rawId).trim();
 }
 
 const functionDeclarations: FunctionDeclaration[] = [
@@ -127,9 +131,9 @@ export async function POST(req: Request) {
     }
 
     const { message, userId } = await req.json();
-    const cleanUserId = normalizeUserId(userId);
+    const userIdStr = cleanUserId(userId);
 
-    if (!message || !cleanUserId) {
+    if (!message || !userIdStr) {
       return NextResponse.json({ error: '缺少必要參數 (message 或 userId)' }, { status: 400 });
     }
 
@@ -139,7 +143,7 @@ export async function POST(req: Request) {
     const { data: instructionsData } = await supabase
       .from('user_instructions')
       .select('instruction')
-      .eq('user_id', cleanUserId);
+      .eq('user_id', userIdStr);
 
     const userRules = instructionsData?.map((item) => item.instruction).join('\n') || '';
 
@@ -147,7 +151,7 @@ export async function POST(req: Request) {
     const { data: activeReminders, error: fetchErr } = await supabase
       .from('user_reminders')
       .select('id, title, remind_at, repeat_type')
-      .eq('user_id', cleanUserId)
+      .eq('user_id', userIdStr)
       .eq('is_triggered', false);
 
     if (fetchErr) {
@@ -158,11 +162,11 @@ export async function POST(req: Request) {
       ? activeReminders.map((r) => `- [ID: ${r.id}] 標題: "${r.title}" (時間: ${r.remind_at}, 重複: ${r.repeat_type || 'none'})`).join('\n')
       : '目前無任何未完成的提醒事項。';
 
-    // 3. 讀取對話紀錄
+    // 3. 讀取歷史紀錄
     const { data: dailyRecords } = await supabase
       .from('daily_chat_history')
       .select('messages')
-      .eq('user_id', cleanUserId)
+      .eq('user_id', userIdStr)
       .order('chat_date', { ascending: true })
       .limit(7);
 
@@ -197,7 +201,7 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
 ${remindersText}
 
 【時間推算與工具呼叫規則】：
-1. 當使用者要求新增「提醒」、「鬧鐘」或「叫我做某事」時，請務必根據【台灣時間】計算目標時間，並轉換為 ISO 8601 UTC 時間字串傳入 set_reminder 的 remind_at 參數，然後呼叫 set_reminder。
+1. 當使用者要求新增「提醒」、「鬧鐘」或「叫我做某事」時，請務必根據【台灣時間】計算目標時間，轉換為 ISO 8601 UTC 時間字串傳入 set_reminder 的 remind_at 參數，並呼叫 set_reminder。
 2. 當使用者要求「取消」、「刪除」提醒事項或鬧鐘時，必須呼叫 cancel_reminder 工具。
 3. 當使用者要求「記住...」、「以後請...」時，必須呼叫 save_instruction 工具。
 4. 呼叫工具後，你必須根據工具傳回的結果實話實說：
@@ -205,9 +209,9 @@ ${remindersText}
    - 若 success 為 true，請親切簡潔地回覆使用者。
 
 請嚴格遵守以下原則：
-1. 保持親切、簡潔且具效益的回答。
-2. 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
-3.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！`;
+5. 保持親切、簡潔且具效益的回答。
+6. 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
+7.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！`;
 
     const candidateModels = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
     let responseText = '';
@@ -237,13 +241,13 @@ ${remindersText}
             const repeatType = args?.repeat_type || (args as any)?.repeatType || 'none';
             const reminderType = args?.reminder_type || (args as any)?.reminderType || 'both';
 
-            const validRemindAt = normalizeToISOString(rawRemindAt) || new Date().toISOString();
+            const validRemindAt = safeToISOString(rawRemindAt) || new Date().toISOString();
 
             const { data: insertedData, error: insertError } = await supabase
               .from('user_reminders')
               .insert([
                 {
-                  user_id: cleanUserId,
+                  user_id: userIdStr,
                   title: String(rawTitle).trim(),
                   remind_at: validRemindAt,
                   repeat_type: repeatType,
@@ -254,7 +258,7 @@ ${remindersText}
               .select();
 
             if (insertError || !insertedData || insertedData.length === 0) {
-              const errMsg = insertError ? insertError.message : '資料庫未傳回寫入結果';
+              const errMsg = insertError ? `${insertError.message} (${insertError.code})` : '資料庫未傳回結果';
               console.error('❌ [新增提醒寫入 DB 失敗]:', insertError);
               result = await sendMessageWithRetry(chat, [
                 {
@@ -278,7 +282,7 @@ ${remindersText}
 
           } else if (name === 'cancel_reminder') {
             const keyword = args?.keyword;
-            let deleteQuery = supabase.from('user_reminders').delete().eq('user_id', cleanUserId);
+            let deleteQuery = supabase.from('user_reminders').delete().eq('user_id', userIdStr);
 
             const searchKw = String(keyword || '').trim();
             if (searchKw && !['all', '全部', '所有'].includes(searchKw.toLowerCase())) {
@@ -328,7 +332,7 @@ ${remindersText}
               .from('user_instructions')
               .insert([
                 {
-                  user_id: cleanUserId,
+                  user_id: userIdStr,
                   instruction: instruction,
                 },
               ])
@@ -372,13 +376,13 @@ ${remindersText}
       throw lastError;
     }
 
-    // 5. 寫入對話歷史
+    // 5. 寫入歷史對話
     const todayStr = new Date().toISOString().split('T')[0];
 
     const { data: todayRecord } = await supabase
       .from('daily_chat_history')
       .select('messages')
-      .eq('user_id', cleanUserId)
+      .eq('user_id', userIdStr)
       .eq('chat_date', todayStr)
       .maybeSingle();
 
@@ -395,7 +399,7 @@ ${remindersText}
       .from('daily_chat_history')
       .upsert(
         {
-          user_id: cleanUserId,
+          user_id: userIdStr,
           chat_date: todayStr,
           messages: updatedMessages,
           updated_at: new Date().toISOString(),
