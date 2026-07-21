@@ -130,7 +130,7 @@ export async function POST(req: Request) {
 
     const userRules = instructionsData?.map((item) => item.instruction).join('\n') || '';
 
-    // 2. 讀取使用者目前未觸發的提醒事項 (明確印出錯誤日誌)
+    // 2. 讀取使用者未觸發的提醒事項
     const { data: activeReminders, error: fetchRemindersErr } = await supabase
       .from('user_reminders')
       .select('id, title, remind_at, repeat_type')
@@ -138,7 +138,7 @@ export async function POST(req: Request) {
       .eq('is_triggered', false);
 
     if (fetchRemindersErr) {
-      console.error('⚠️ [Supabase 查詢提醒失敗]:', fetchRemindersErr);
+      console.error('⚠️ [查詢 user_reminders 失敗]:', fetchRemindersErr);
     }
 
     const remindersText = activeReminders && activeReminders.length > 0
@@ -178,7 +178,7 @@ ${userRules ? userRules : '目前尚無特殊偏好設定。'}
 使用者目前在資料庫中生效的未完成提醒事項：
 ${remindersText}
 
-請嚴格遵守以下原則：
+【極重要原則】：
 1. 當使用者要求新增「提醒」、「鬧鐘」或「叫我做某事」時，你必須呼叫 set_reminder 工具，絕對不能只用文字回答「已設定完成」。
 2. 當使用者要求「取消」、「刪除」提醒事項或鬧鐘時，你必須呼叫 cancel_reminder 工具，絕對不能回答「無法取消」。
 3. 當使用者要求「記住...」、「以後請...」時，你必須呼叫 save_instruction 工具。
@@ -225,7 +225,6 @@ ${remindersText}
               }
             }
 
-            // 實作寫入並用 .select() 驗證
             const { data: insertedData, error: insertError } = await supabase
               .from('user_reminders')
               .insert([
@@ -242,7 +241,7 @@ ${remindersText}
 
             if (insertError || !insertedData || insertedData.length === 0) {
               const errMsg = insertError ? insertError.message : '資料庫未傳回寫入結果';
-              console.error('❌ [新增提醒寫入失敗]:', insertError);
+              console.error('❌ [新增提醒失敗]:', insertError);
               result = await sendMessageWithRetry(chat, [
                 {
                   functionResponse: {
@@ -272,7 +271,6 @@ ${remindersText}
               deleteQuery = deleteQuery.ilike('title', `%${searchKw}%`);
             }
 
-            // 執行刪除並透過 .select() 取得被刪除的資料項目
             const { data: deletedData, error: deleteError } = await deleteQuery.select();
 
             if (deleteError) {
