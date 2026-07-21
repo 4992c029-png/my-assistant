@@ -126,7 +126,6 @@ function MessageBubbleItem({
   return (
     <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
       <div className="flex flex-col max-w-[85%] space-y-1 relative group">
-        {/* 長按複製成功 Toast 提示 */}
         {copied && (
           <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-emerald-400 border border-emerald-500/40 text-xs px-3 py-1 rounded-full shadow-xl z-20 whitespace-nowrap animate-bounce font-medium">
             ✓ 已複製對話內容
@@ -252,7 +251,6 @@ export default function Home() {
 
   const currentStyle = sizeStyles[fontSize];
 
-  // 自動捲動置底
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -261,7 +259,7 @@ export default function Home() {
     scrollToBottom();
   }, [messages]);
 
-  // 註冊 Service Worker 與音效解鎖機制初始化
+  // 音效解鎖與 SW 註冊
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const audio = new Audio(BEEP_AUDIO_BASE64);
@@ -310,11 +308,12 @@ export default function Home() {
       const perm = await Notification.requestPermission();
       setNotificationPermission(perm);
       if (perm === 'granted') {
-        alert('推播通知權限已開啟！鬧鐘可在背景提醒您。');
+        alert('推播通知權限已開啟！');
       }
     }
   };
 
+  // ⏰ 核心提醒檢查邏輯 (支援亮屏即時與休眠喚醒自動補發)
   const checkAndTriggerReminders = async () => {
     if (!userId || reminders.length === 0) return;
 
@@ -323,6 +322,7 @@ export default function Home() {
       if (reminder.is_triggered || processingIdsRef.current.has(reminder.id)) continue;
 
       const remindTime = new Date(reminder.remind_at);
+      // 當前時間已大於等於預定時間，不論是剛好到期或休眠結束喚醒，均觸發提醒
       if (now >= remindTime) {
         processingIdsRef.current.add(reminder.id);
         await processTriggeredReminder(reminder);
@@ -392,20 +392,27 @@ export default function Home() {
     }
   };
 
+  // ⚡ 螢幕亮起與應用程式復甦事件監聽 (非休眠狀態即時偵測)
   useEffect(() => {
+    // 1. 亮屏/前台輪詢 (1秒檢查一次)
     const interval = setInterval(checkAndTriggerReminders, 1000);
 
-    const handleVisibilityChange = () => {
+    // 2. 解鎖手機 / 點亮螢幕 / 切回 App 瞬間觸發補發機制
+    const handleWakeUp = () => {
       if (document.visibilityState === 'visible') {
         checkAndTriggerReminders();
       }
     };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('visibilitychange', handleWakeUp);
+    window.addEventListener('focus', handleWakeUp);
+    window.addEventListener('pageshow', handleWakeUp);
 
     return () => {
       clearInterval(interval);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('visibilitychange', handleWakeUp);
+      window.removeEventListener('focus', handleWakeUp);
+      window.removeEventListener('pageshow', handleWakeUp);
     };
   }, [reminders, userId]);
 
@@ -466,7 +473,7 @@ export default function Home() {
       setNewReminderTitle('');
       setNewReminderTime(getLocalDateTimeString());
       setNewReminderRepeat('none');
-      alert('鬧鐘/提醒設定成功！⏰');
+      alert('提醒設定成功！⏰');
     } else {
       alert('設定失敗，請確認格式');
     }
@@ -903,7 +910,7 @@ export default function Home() {
             </button>
           </header>
 
-          {/* 2. 聊天對話區（嵌入長按複製功能） */}
+          {/* 2. 聊天對話區 */}
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
             {messages.length === 0 ? (
               <div className="text-center text-slate-500 py-20 text-lg">
@@ -945,7 +952,7 @@ export default function Home() {
         </>
       )}
 
-      {/* 🌟 全螢幕鬧鐘響起 Modal */}
+      {/* 🌟 鬧鐘/提醒觸發 Modal (螢幕亮起或復甦時即時顯示) */}
       {activeAlarm && (
         <div className="fixed inset-0 bg-rose-950/95 backdrop-blur-xl flex flex-col items-center justify-center p-6 z-50 animate-pulse">
           <div className="text-center max-w-md space-y-6">
@@ -1007,7 +1014,6 @@ export default function Home() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {/* 用戶資訊 */}
               <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-700/50 flex flex-col gap-3">
                 <div className="flex items-center gap-3">
                   {user?.user_metadata?.avatar_url ? (
@@ -1038,7 +1044,6 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* 跳出獨立提醒 Modal */}
               <div className="pt-2">
                 <button
                   onClick={() => {
@@ -1059,7 +1064,6 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* 大腦規則管理 */}
               <div className="space-y-3 pt-4 border-t border-slate-700/50">
                 <h4 className="text-base font-bold text-slate-300 flex items-center gap-1.5">
                   🧠 編輯大腦指導偏好 ({instructions.length})
@@ -1145,13 +1149,13 @@ export default function Home() {
         </div>
       )}
 
-      {/* 獨立跳出的提醒 Modal */}
+      {/* 獨立提醒設定 Modal */}
       {showReminderModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-40">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
             <div className="flex-shrink-0 p-5 border-b border-slate-700 flex justify-between items-center bg-slate-800/50">
               <h3 className="text-xl font-bold text-violet-400 flex items-center gap-2">
-                ⏰ 鬧鐘與日程提醒設定
+                ⏰ 提醒與鬧鐘設定
               </h3>
               <button
                 onClick={() => setShowReminderModal(false)}
@@ -1173,7 +1177,7 @@ export default function Home() {
               {notificationPermission !== 'granted' && (
                 <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 flex items-center justify-between gap-2">
                   <p className="text-xs text-amber-200">
-                    開啟手機背景推播權限，螢幕休眠時也能收到提醒！
+                    開啟手機推播權限，使用手機時能獲得系統提示！
                   </p>
                   <button
                     onClick={requestNotificationPermission}
@@ -1184,7 +1188,6 @@ export default function Home() {
                 </div>
               )}
 
-              {/* 新增提醒表單 */}
               <div className="bg-slate-900/60 border border-slate-700/60 rounded-xl p-4 space-y-3">
                 <h4 className="text-sm font-bold text-slate-200">➕ 新增提醒 / 鬧鐘</h4>
                 <div>
@@ -1244,7 +1247,6 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* 提醒清單 */}
               <div className="space-y-3">
                 <h4 className="text-sm font-bold text-slate-300">
                   📋 待觸發提醒與鬧鐘 ({reminders.length})
@@ -1304,7 +1306,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* 清空確認 Modal */}
+      {/* 清空對話確認 Modal */}
       {showResetModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
