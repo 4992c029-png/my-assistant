@@ -384,7 +384,7 @@ ${remindersText}
       }
     }
 
-    // E. 寫入對話歷史紀錄
+    // E. 寫入對話歷史紀錄 (修正 TypeScript 對於 todayRecord 可為 null 的型別檢查)
     const todayStr = new Date().toISOString().split('T')[0];
     const { data: todayRecord } = await supabase
       .from('daily_chat_history')
@@ -393,10 +393,12 @@ ${remindersText}
       .eq('chat_date', todayStr)
       .maybeSingle();
 
-    const currentMessages = Array.isArray(todayRecord?.messages) ? todayRecord.messages : [];
+    const rawMessages = todayRecord?.messages;
+    const currentMessages: any[] = Array.isArray(rawMessages) ? rawMessages : [];
+
     const updatedMessages = [
       ...currentMessages,
-      { role: 'user', content: message, timestamp: new Date().toISOString },
+      { role: 'user', content: message, timestamp: new Date().toISOString() },
       { role: 'model', content: responseText, timestamp: new Date().toISOString() },
     ];
 
