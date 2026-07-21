@@ -85,7 +85,6 @@ const i18n = {
   zh: {
     assistantName: '專屬助理',
     online: '在線中',
-    fontSizeSelect: '全域字體大小',
     fontSmall: '字體：小',
     fontMedium: '字體：中',
     fontLarge: '字體：大',
@@ -147,7 +146,6 @@ const i18n = {
   en: {
     assistantName: 'AI Assistant',
     online: 'Online',
-    fontSizeSelect: 'Global Font Size',
     fontSmall: 'Font: Small',
     fontMedium: 'Font: Medium',
     fontLarge: 'Font: Large',
@@ -337,12 +335,12 @@ export default function Home() {
   const [showDislikeModal, setShowDislikeModal] = useState(false);
   const [showImageModal, setShowImageModal] = useState(false);
 
-  // 🎨 AI 圖片生成
+  // AI 圖片生成
   const [imagePrompt, setImagePrompt] = useState('');
   const [generatedImageUrl, setGeneratedImageUrl] = useState('');
   const [imageLoading, setImageLoading] = useState(false);
 
-  // 🎤 語音輸入與 AI 潤飾狀態
+  // 語音輸入與 AI 潤飾狀態
   const [isListening, setIsListening] = useState(false);
   const [isRefiningVoice, setIsRefiningVoice] = useState(false);
   const recognitionRef = useRef<any>(null);
@@ -355,7 +353,7 @@ export default function Home() {
   const [editingInstructionId, setEditingInstructionId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
 
-  // ⏰ 提醒與鬧鐘
+  // 提醒與鬧鐘
   const [reminders, setReminders] = useState<any[]>([]);
   const [newReminderTitle, setNewReminderTitle] = useState('');
   const [newReminderTime, setNewReminderTime] = useState(getLocalDateTimeString());
@@ -371,43 +369,43 @@ export default function Home() {
 
   const t = i18n[lang];
 
-  // 🌟 全域動態縮放樣式表 (適用於全介面：對話框、標題列、彈出視窗、選單、按鈕與標籤)
+  // 🌟 全域動態縮放樣式表 (整體尺寸皆已增大 2px)
   const sizeStyles = {
     small: {
-      headerTitle: 'text-base font-bold',
-      bubble: 'text-sm p-2.5 px-3.5 rounded-2xl',
-      input: 'text-sm py-2 px-3',
-      sendBtn: 'text-sm px-3.5 py-1.5',
-      feedbackBtn: 'text-xs mt-1 pl-1 space-x-2',
-      modalTitle: 'text-base font-bold',
-      modalText: 'text-xs',
-      modalBtn: 'text-xs py-1.5 px-3',
-      badge: 'text-[10px]',
-      settingItem: 'text-xs p-2.5',
+      headerTitle: 'text-[18px] font-bold',
+      bubble: 'text-[16px] p-2.5 px-3.5 rounded-2xl',
+      input: 'text-[16px] py-2 px-3',
+      sendBtn: 'text-[16px] px-3.5 py-1.5',
+      feedbackBtn: 'text-[14px] mt-1 pl-1 space-x-2',
+      modalTitle: 'text-[18px] font-bold',
+      modalText: 'text-[14px]',
+      modalBtn: 'text-[14px] py-1.5 px-3',
+      badge: 'text-[12px]',
+      settingItem: 'text-[14px] p-2.5',
     },
     medium: {
-      headerTitle: 'text-lg font-bold',
-      bubble: 'text-lg p-3 px-5 rounded-3xl',
-      input: 'text-lg py-2 px-4',
-      sendBtn: 'text-lg px-5 py-2',
-      feedbackBtn: 'text-sm mt-1.5 pl-1.5 space-x-3',
-      modalTitle: 'text-xl font-bold',
-      modalText: 'text-base',
-      modalBtn: 'text-sm py-2 px-4',
-      badge: 'text-xs',
-      settingItem: 'text-sm p-3.5',
+      headerTitle: 'text-[20px] font-bold',
+      bubble: 'text-[20px] p-3 px-5 rounded-3xl',
+      input: 'text-[20px] py-2 px-4',
+      sendBtn: 'text-[20px] px-5 py-2',
+      feedbackBtn: 'text-[16px] mt-1.5 pl-1.5 space-x-3',
+      modalTitle: 'text-[22px] font-bold',
+      modalText: 'text-[18px]',
+      modalBtn: 'text-[16px] py-2 px-4',
+      badge: 'text-[14px]',
+      settingItem: 'text-[16px] p-3.5',
     },
     large: {
-      headerTitle: 'text-2xl font-bold',
-      bubble: 'text-2xl p-4 px-6 rounded-[1.8rem]',
-      input: 'text-xl py-3 px-5',
-      sendBtn: 'text-xl px-6 py-2.5',
-      feedbackBtn: 'text-base mt-2 pl-2 space-x-4',
-      modalTitle: 'text-2xl font-bold',
-      modalText: 'text-lg',
-      modalBtn: 'text-base py-2.5 px-5',
-      badge: 'text-sm',
-      settingItem: 'text-base p-4',
+      headerTitle: 'text-[26px] font-bold',
+      bubble: 'text-[26px] p-4 px-6 rounded-[1.8rem]',
+      input: 'text-[22px] py-3 px-5',
+      sendBtn: 'text-[22px] px-6 py-2.5',
+      feedbackBtn: 'text-[18px] mt-2 pl-2 space-x-4',
+      modalTitle: 'text-[26px] font-bold',
+      modalText: 'text-[20px]',
+      modalBtn: 'text-[18px] py-2.5 px-5',
+      badge: 'text-[16px]',
+      settingItem: 'text-[18px] p-4',
     },
   };
 
@@ -594,6 +592,39 @@ export default function Home() {
     }
   };
 
+  // 🌟 修復 1：載入該使用者的過往歷史對話紀錄
+  const fetchHistory = async (uid: string) => {
+    if (!uid || !isValidUUID(uid) || !supabase) return;
+    try {
+      const { data, error } = await supabase
+        .from('daily_chat_history')
+        .select('messages, chat_date')
+        .eq('user_id', uid)
+        .order('chat_date', { ascending: true })
+        .limit(60);
+
+      if (!error && data) {
+        let loadedMsgs: any[] = [];
+        data.forEach((record) => {
+          if (Array.isArray(record.messages)) {
+            loadedMsgs.push(...record.messages);
+          }
+        });
+
+        const formatted = loadedMsgs.map((item, index) => ({
+          id: item.id || `hist_${index}_${Date.now()}`,
+          role: item.role === 'user' ? 'user' : 'model',
+          content: item.content || '',
+          imageUrl: item.imageUrl || null,
+        }));
+
+        setMessages(formatted);
+      }
+    } catch (err) {
+      console.error('載入歷史對話紀錄失敗:', err);
+    }
+  };
+
   const handleAddReminder = async () => {
     if (!newReminderTitle.trim() || !newReminderTime || !supabase || !isValidUUID(userId)) {
       alert('請填寫完整提醒內容與時間！');
@@ -664,6 +695,7 @@ export default function Home() {
           setUserId(session.user.id);
           fetchInstructions(session.user.id);
           fetchReminders(session.user.id);
+          fetchHistory(session.user.id); // 自動同步歷史紀錄
         }
       } catch (err) {
         console.error('Session 恢復失敗:', err);
@@ -682,6 +714,7 @@ export default function Home() {
         setUserId(currentSession.user.id);
         fetchInstructions(currentSession.user.id);
         fetchReminders(currentSession.user.id);
+        fetchHistory(currentSession.user.id); // 自動同步歷史紀錄
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setUserId('');
@@ -725,6 +758,7 @@ export default function Home() {
               setUserId(data.user.id);
               fetchInstructions(data.user.id);
               fetchReminders(data.user.id);
+              fetchHistory(data.user.id); // 自動同步歷史紀錄
             } else if (error) {
               alert(`Google 認證失敗: ${error.message}`);
             }
@@ -826,7 +860,7 @@ export default function Home() {
     }
   };
 
-  // 🎤 語音接收 + AI 即時潤飾語義
+  // 語音接收 + AI 即時潤飾語義
   const toggleVoiceInput = () => {
     if (typeof window === 'undefined') return;
 
@@ -892,7 +926,7 @@ export default function Home() {
     }
   };
 
-  // 🎨 AI 圖片生成處理 (修正連線失敗問題)
+  // AI 圖片生成處理
   const handleGenerateImage = async () => {
     if (!imagePrompt.trim() || imageLoading || !isValidUUID(userId)) return;
     setImageLoading(true);
@@ -1096,7 +1130,18 @@ export default function Home() {
             </div>
 
             <div className="flex items-center gap-2 flex-shrink-0">
-              {/* 語言切換 */}
+              {/* 🌟 修復 2：字體大小下拉選單 (放置於語言切換旁) */}
+              <select
+                value={fontSize}
+                onChange={(e) => handleFontSizeChange(e.target.value as 'small' | 'medium' | 'large')}
+                className={`bg-white/10 text-white border border-white/20 rounded-xl px-2 py-1.5 font-semibold focus:outline-none appearance-none cursor-pointer ${currentStyle.modalBtn}`}
+              >
+                <option value="small" className="bg-slate-800 text-white">{t.fontSmall}</option>
+                <option value="medium" className="bg-slate-800 text-white">{t.fontMedium}</option>
+                <option value="large" className="bg-slate-800 text-white">{t.fontLarge}</option>
+              </select>
+
+              {/* 語言切換選單 */}
               <select
                 value={lang}
                 onChange={(e) => handleLangChange(e.target.value as 'zh' | 'en')}
@@ -1186,7 +1231,7 @@ export default function Home() {
         </>
       )}
 
-      {/* 🌟 AI 圖片生成 Modal */}
+      {/* AI 圖片生成 Modal */}
       {showImageModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-5 w-full max-w-md shadow-2xl space-y-4">
@@ -1231,7 +1276,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* 🌟 鬧鐘/提醒觸發 Modal */}
+      {/* 鬧鐘/提醒觸發 Modal */}
       {activeAlarm && (
         <div className="fixed inset-0 bg-rose-950/95 backdrop-blur-xl flex flex-col items-center justify-center p-6 z-50 animate-pulse">
           <div className="text-center max-w-md space-y-6">
@@ -1257,7 +1302,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* ⚙️ 主設定 Modal (整合統一字體切換) */}
+      {/* ⚙️ 主設定 Modal */}
       {showSettingsModal && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 z-40">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
@@ -1285,24 +1330,6 @@ export default function Home() {
                 <button onClick={handleLogout} className={`w-full bg-rose-600/20 hover:bg-rose-600/35 border border-rose-500/30 text-rose-300 font-semibold rounded-lg ${currentStyle.modalBtn}`}>
                   {t.logout}
                 </button>
-              </div>
-
-              {/* 🔤 統一全域字體選擇 */}
-              <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-700/50 flex items-center justify-between">
-                <span className={`${currentStyle.modalText} font-bold text-slate-200`}>{t.fontSizeSelect}</span>
-                <div className="flex gap-1 bg-slate-950 p-1 rounded-xl border border-slate-700">
-                  {(['small', 'medium', 'large'] as const).map((size) => (
-                    <button
-                      key={size}
-                      onClick={() => handleFontSizeChange(size)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                        fontSize === size ? 'bg-violet-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      {size === 'small' ? '小' : size === 'medium' ? '中' : '大'}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               {/* 提醒中心 */}
