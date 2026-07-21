@@ -9,7 +9,6 @@ import { createClient } from '@supabase/supabase-js';
 
 const Type = SchemaType;
 
-// 優先選用 SERVICE_ROLE_KEY 以獲取管理者權限
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -30,12 +29,31 @@ function safeToISOString(input: any): string | null {
   }
 }
 
+/**
+ * 防爆 UserId 清理器：
+ * 將非 ASCII (如中文) 轉為安全 encodeURIComponent 格式，徹底解決 Undici ByteString (character > 255) 崩潰問題
+ */
 function cleanUserId(rawId: any): string {
-  if (!rawId) return '';
+  if (!rawId) return 'default_user';
+  let idStr = '';
   if (typeof rawId === 'object') {
-    return String(rawId.id || rawId.userId || rawId.sub || rawId.email || '').trim();
+    idStr = String(rawId.id || rawId.userId || rawId.sub || rawId.email || '').trim();
+  } else {
+    idStr = String(rawId).trim();
   }
-  return String(rawId).trim();
+  if (!idStr) return 'default_user';
+  return encodeURIComponent(idStr);
+}
+
+/**
+ * 取得 API Keys 清單 (支援用逗號分隔的多組 Key 備援)
+ */
+function getApiKeys(): string[] {
+  const raw = process.env.GEMINI_API_KEY || '';
+  return raw
+    .split(',')
+    .map((k) => k.trim())
+    .filter(Boolean);
 }
 
 const functionDeclarations: FunctionDeclaration[] = [
@@ -97,22 +115,21 @@ const functionDeclarations: FunctionDeclaration[] = [
 
 const tools: Tool[] = [{ functionDeclarations }];
 
-async function sendMessageWithRetry(chatSession: any, payload: any, maxRetries = 3, initialDelay = 1000) {
+async function sendMessageWithRetry(chatSession: any, payload: any, maxRetries = 2, initialDelay = 2000) {
   let delay = initialDelay;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await chatSession.sendMessage(payload);
     } catch (error: any) {
-      const isTransientError =
-        error?.status === 503 ||
+      const isRateLimit =
         error?.status === 429 ||
-        String(error?.message).includes('503') ||
+        error?.status === 503 ||
         String(error?.message).includes('429') ||
-        String(error?.message).includes('high demand');
+        String(error?.message).includes('Quota exceeded');
 
-      if (isTransientError && attempt < maxRetries) {
-        console.warn(`[Gemini API Warning] 流量限制或過載 (${error?.status})，等待 ${delay}ms 後重試...`);
+      if (isRateLimit && attempt < maxRetries) {
+        console.warn(`[Gemini API] 觸發流量限制 (429)，等待 ${delay}ms 後進行重試 (第 ${attempt} 次)...`);
         await new Promise((resolve) => setTimeout(resolve, delay));
         delay *= 2;
       } else {
@@ -124,8 +141,8 @@ async function sendMessageWithRetry(chatSession: any, payload: any, maxRetries =
 
 export async function POST(req: Request) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
+    const apiKeys = getApiKeys();
+    if (apiKeys.length === 0) {
       return NextResponse.json(
         { error: '系統未設定 GEMINI_API_KEY 環境變數。' },
         { status: 500 }
@@ -139,8 +156,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: '缺少必要參數 (message 或 userId)' }, { status: 400 });
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-
     // 1. 讀取記憶規則
     const { data: instructionsData } = await supabase
       .from('user_instructions')
@@ -149,7 +164,7 @@ export async function POST(req: Request) {
 
     const userRules = instructionsData?.map((item) => item.instruction).join('\n') || '';
 
-    // 2. 讀取未完成提醒
+    // 2. 讀取未完成提醒 (userIdStr 已轉化為 safe ASCII)
     const { data: activeReminders, error: fetchErr } = await supabase
       .from('user_reminders')
       .select('id, title, remind_at, repeat_type')
@@ -209,109 +224,79 @@ ${remindersText}
 4. 呼叫工具後，你必須根據工具傳回的結果實話實說：
    - 若 success 為 false，必須如實告知使用者失敗原因，嚴禁謊報設定成功！
    - 若 success 為 true，請親切簡潔地回覆使用者。
-請嚴格遵守以下原則：
+   
+   請嚴格遵守以下原則：
 1. 保持親切、簡潔且具效益的回答。
 2. 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
-3.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！   
-   `;
+3.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！`;
 
-    // 調整模型選擇順序：改用高額度的 gemini-2.0-flash 與 gemini-1.5-flash
-    const candidateModels = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash'];
+    // 修正模型的正確 API 名稱，避開 404 與 低額度限制
+    const candidateModels = [
+      'gemini-2.0-flash',
+      'gemini-2.0-flash-lite',
+      'gemini-1.5-flash-latest',
+      'gemini-1.5-pro-latest',
+      'gemini-2.5-flash-latest',
+      'gemini-2.5-flash',
+      
+    ];
+
     let responseText = '';
     let lastError: any = null;
+    let requestSuccess = false;
 
-    for (const modelName of candidateModels) {
-      try {
-        const model = genAI.getGenerativeModel({
-          model: modelName,
-          systemInstruction: systemInstruction,
-          tools: tools,
-        });
+    // 雙層備援機制：依次輪詢 API Key 與 模型清單
+    keyLoop: for (const apiKey of apiKeys) {
+      const genAI = new GoogleGenerativeAI(apiKey);
 
-        const chat = model.startChat({ history: formattedHistory });
+      for (const modelName of candidateModels) {
+        try {
+          const model = genAI.getGenerativeModel({
+            model: modelName,
+            systemInstruction: systemInstruction,
+            tools: tools,
+          });
 
-        let result = await sendMessageWithRetry(chat, message);
-        let response = await result.response;
-        let functionCalls = response.functionCalls();
+          const chat = model.startChat({ history: formattedHistory });
 
-        if (functionCalls && functionCalls.length > 0) {
-          const call = functionCalls[0];
-          const { name, args } = call;
+          let result = await sendMessageWithRetry(chat, message);
+          let response = await result.response;
+          let functionCalls = response.functionCalls();
 
-          if (name === 'set_reminder') {
-            const rawTitle = args?.title;
-            const rawRemindAt = args?.remind_at || (args as any)?.remindAt;
-            const repeatType = args?.repeat_type || (args as any)?.repeatType || 'none';
-            const reminderType = args?.reminder_type || (args as any)?.reminderType || 'both';
+          if (functionCalls && functionCalls.length > 0) {
+            const call = functionCalls[0];
+            const { name, args } = call;
 
-            const validRemindAt = safeToISOString(rawRemindAt) || new Date().toISOString();
+            if (name === 'set_reminder') {
+              const rawTitle = args?.title;
+              const rawRemindAt = args?.remind_at || (args as any)?.remindAt;
+              const repeatType = args?.repeat_type || (args as any)?.repeatType || 'none';
+              const reminderType = args?.reminder_type || (args as any)?.reminderType || 'both';
 
-            const { data: insertedData, error: insertError } = await supabase
-              .from('user_reminders')
-              .insert([
-                {
-                  user_id: userIdStr,
-                  title: String(rawTitle).trim(),
-                  remind_at: validRemindAt,
-                  repeat_type: repeatType,
-                  reminder_type: reminderType,
-                  is_triggered: false,
-                },
-              ])
-              .select();
+              const validRemindAt = safeToISOString(rawRemindAt) || new Date().toISOString();
 
-            if (insertError || !insertedData || insertedData.length === 0) {
-              const errMsg = insertError ? `${insertError.message} (代碼: ${insertError.code})` : '資料庫未傳回結果';
-              console.error('❌ [新增提醒寫入 DB 失敗]:', insertError);
-              result = await sendMessageWithRetry(chat, [
-                {
-                  functionResponse: {
-                    name: 'set_reminder',
-                    response: { success: false, error: `寫入資料庫失敗：${errMsg}` },
+              const { data: insertedData, error: insertError } = await supabase
+                .from('user_reminders')
+                .insert([
+                  {
+                    user_id: userIdStr,
+                    title: String(rawTitle).trim(),
+                    remind_at: validRemindAt,
+                    repeat_type: repeatType,
+                    reminder_type: reminderType,
+                    is_triggered: false,
                   },
-                },
-              ]);
-            } else {
-              result = await sendMessageWithRetry(chat, [
-                {
-                  functionResponse: {
-                    name: 'set_reminder',
-                    response: { success: true, message: `已成功在資料庫寫入提醒：${rawTitle}` },
-                  },
-                },
-              ]);
-            }
-            responseText = (await result.response).text();
+                ])
+                .select();
 
-          } else if (name === 'cancel_reminder') {
-            const keyword = args?.keyword;
-            let deleteQuery = supabase.from('user_reminders').delete().eq('user_id', userIdStr);
-
-            const searchKw = String(keyword || '').trim();
-            if (searchKw && !['all', '全部', '所有'].includes(searchKw.toLowerCase())) {
-              deleteQuery = deleteQuery.ilike('title', `%${searchKw}%`);
-            }
-
-            const { data: deletedData, error: deleteError } = await deleteQuery.select();
-
-            if (deleteError) {
-              console.error('❌ [刪除提醒失敗]:', deleteError);
-              result = await sendMessageWithRetry(chat, [
-                {
-                  functionResponse: {
-                    name: 'cancel_reminder',
-                    response: { success: false, error: `資料庫刪除失敗：${deleteError.message}` },
-                  },
-                },
-              ]);
-            } else {
-              const count = deletedData ? deletedData.length : 0;
-              if (count > 0) {
+              if (insertError || !insertedData || insertedData.length === 0) {
+                const errMsg = insertError ? `${insertError.message} (代碼: ${insertError.code})` : '資料庫未傳回結果';
+                console.error('❌ [新增提醒寫入 DB 失敗]:', insertError);
                 result = await sendMessageWithRetry(chat, [
                   {
                     functionResponse: {
-                      name: 'cancel_reminder',
-                      response: { success: true, message: `已成功從資料庫刪除 ${count} 筆提醒` },
+                      name: 'set_reminder',
+                      response: { success: false, error: `寫入資料庫失敗：${errMsg}` },
                     },
                   },
                 ]);
@@ -319,63 +304,108 @@ ${remindersText}
                 result = await sendMessageWithRetry(chat, [
                   {
                     functionResponse: {
-                      name: 'cancel_reminder',
-                      response: { success: false, error: `資料庫中未找到與 "${searchKw}" 相符的未完成提醒` },
+                      name: 'set_reminder',
+                      response: { success: true, message: `已成功在資料庫寫入提醒：${rawTitle}` },
                     },
                   },
                 ]);
               }
-            }
-            responseText = (await result.response).text();
+              responseText = (await result.response).text();
 
-          } else if (name === 'save_instruction') {
-            const { instruction } = args as any;
+            } else if (name === 'cancel_reminder') {
+              const keyword = args?.keyword;
+              let deleteQuery = supabase.from('user_reminders').delete().eq('user_id', userIdStr);
 
-            const { data: insertedData, error: insertError } = await supabase
-              .from('user_instructions')
-              .insert([
-                {
-                  user_id: userIdStr,
-                  instruction: instruction,
-                },
-              ])
-              .select();
+              const searchKw = String(keyword || '').trim();
+              if (searchKw && !['all', '全部', '所有'].includes(searchKw.toLowerCase())) {
+                deleteQuery = deleteQuery.ilike('title', `%${searchKw}%`);
+              }
 
-            if (insertError || !insertedData || insertedData.length === 0) {
-              console.error('❌ [儲存記憶失敗]:', insertError);
-              result = await sendMessageWithRetry(chat, [
-                {
-                  functionResponse: {
-                    name: 'save_instruction',
-                    response: { success: false, error: `儲存失敗：${insertError?.message || '未知錯誤'}` },
+              const { data: deletedData, error: deleteError } = await deleteQuery.select();
+
+              if (deleteError) {
+                console.error('❌ [刪除提醒失敗]:', deleteError);
+                result = await sendMessageWithRetry(chat, [
+                  {
+                    functionResponse: {
+                      name: 'cancel_reminder',
+                      response: { success: false, error: `資料庫刪除失敗：${deleteError.message}` },
+                    },
                   },
-                },
-              ]);
-            } else {
-              result = await sendMessageWithRetry(chat, [
-                {
-                  functionResponse: {
-                    name: 'save_instruction',
-                    response: { success: true, message: `已成功儲存偏好規則：${instruction}` },
+                ]);
+              } else {
+                const count = deletedData ? deletedData.length : 0;
+                if (count > 0) {
+                  result = await sendMessageWithRetry(chat, [
+                    {
+                      functionResponse: {
+                        name: 'cancel_reminder',
+                        response: { success: true, message: `已成功從資料庫刪除 ${count} 筆提醒` },
+                      },
+                    },
+                  ]);
+                } else {
+                  result = await sendMessageWithRetry(chat, [
+                    {
+                      functionResponse: {
+                        name: 'cancel_reminder',
+                        response: { success: false, error: `資料庫中未找到與 "${searchKw}" 相符的未完成提醒` },
+                      },
+                    },
+                  ]);
+                }
+              }
+              responseText = (await result.response).text();
+
+            } else if (name === 'save_instruction') {
+              const { instruction } = args as any;
+
+              const { data: insertedData, error: insertError } = await supabase
+                .from('user_instructions')
+                .insert([
+                  {
+                    user_id: userIdStr,
+                    instruction: instruction,
                   },
-                },
-              ]);
+                ])
+                .select();
+
+              if (insertError || !insertedData || insertedData.length === 0) {
+                console.error('❌ [儲存記憶失敗]:', insertError);
+                result = await sendMessageWithRetry(chat, [
+                  {
+                    functionResponse: {
+                      name: 'save_instruction',
+                      response: { success: false, error: `儲存失敗：${insertError?.message || '未知錯誤'}` },
+                    },
+                  },
+                ]);
+              } else {
+                result = await sendMessageWithRetry(chat, [
+                  {
+                    functionResponse: {
+                      name: 'save_instruction',
+                      response: { success: true, message: `已成功儲存偏好規則：${instruction}` },
+                    },
+                  },
+                ]);
+              }
+              responseText = (await result.response).text();
             }
-            responseText = (await result.response).text();
+          } else {
+            responseText = response.text();
           }
-        } else {
-          responseText = response.text();
-        }
 
-        lastError = null;
-        break;
-      } catch (err: any) {
-        lastError = err;
-        console.warn(`[Gemini API Error] 模型 ${modelName} 失敗，嘗試備援... 錯誤:`, err?.message);
+          requestSuccess = true;
+          break keyLoop; // 成功呼叫後跳出所有迴圈
+        } catch (err: any) {
+          lastError = err;
+          console.warn(`[Gemini API 嘗試失敗] Key/模型 (${modelName}):`, err?.message);
+        }
       }
     }
 
-    if (lastError) {
+    if (!requestSuccess && lastError) {
       throw lastError;
     }
 
@@ -412,9 +442,9 @@ ${remindersText}
 
     return NextResponse.json({ reply: responseText });
   } catch (err: any) {
-    console.error('Chat API 錯誤:', err);
+    console.error('Chat API 最終錯誤:', err);
     return NextResponse.json(
-      { error: '伺服器處理失敗', details: err?.message || String(err) },
+      { error: 'API 額度耗盡或處理失敗，請稍後再試或新增 API Key。', details: err?.message || String(err) },
       { status: 500 }
     );
   }
