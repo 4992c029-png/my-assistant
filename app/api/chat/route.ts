@@ -2,15 +2,13 @@ import { NextResponse } from 'next/server';
 import {
   GoogleGenerativeAI,
   FunctionDeclaration,
-  Tool,
   SchemaType,
 } from '@google/generative-ai';
-import Groq from 'groq-sdk';
 import { createClient } from '@supabase/supabase-js';
 
 const Type = SchemaType;
 
-// 1. 環境變數淨化（防止非 ASCII 字元破壞 Header）
+// 1. 環境變數淨化（過濾中文字元與非 ASCII 字元，避免 Header 崩潰）
 function sanitizeAscii(str: string | undefined): string {
   if (!str) return '';
   return str.replace(/[^\x00-\x7F]/g, '').trim();
@@ -89,8 +87,8 @@ const functionDeclarations: FunctionDeclaration[] = [
   },
 ];
 
-// 轉譯成 OpenAI / Groq 格式的 Tool 結構
-const groqTools: Groq.Chat.Completions.ChatCompletionTool[] = functionDeclarations.map((f) => ({
+// 轉譯成 Groq / OpenAI 相容格式
+const groqTools = functionDeclarations.map((f) => ({
   type: 'function',
   function: {
     name: f.name,
@@ -164,8 +162,8 @@ async function executeTool(name: string, args: any, userIdStr: string) {
   return { success: false, error: '未知的工具名稱' };
 }
 
-// 4. Groq 備援呼叫處理函式
-async function runGroqFallback(
+// 4. 使用原生 HTTP fetch 呼叫 Groq REST API (零 SDK 依賴)
+async function runGroqFallbackFetch(
   systemPrompt: string,
   history: Array<{ role: string; content: string }>,
   userMessage: string,
@@ -173,39 +171,53 @@ async function runGroqFallback(
 ): Promise<string> {
   const groqApiKey = sanitizeAscii(process.env.GROQ_API_KEY);
   if (!groqApiKey) {
-    throw new Error('Groq API Key 未設定');
+    throw new Error('Groq API Key 未設定，請在環境變數設定 GROQ_API_KEY。');
   }
 
-  const groq = new Groq({ apiKey: groqApiKey });
-
-  const messages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
+  const messages: any[] = [
     { role: 'system', content: systemPrompt },
     ...history.map((h) => ({
-      role: h.role === 'user' ? ('user' as const) : ('assistant' as const),
+      role: h.role === 'user' ? 'user' : 'assistant',
       content: h.content,
     })),
     { role: 'user', content: userMessage },
   ];
 
-  // 選用 Groq 目前最強且支援 Tool Calling 的模型
-  const completion = await groq.chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
-    messages: messages,
-    tools: groqTools,
-    tool_choice: 'auto',
+  const groqEndpoint = 'https://api.groq.com/openai/v1/chat/completions';
+
+  // 第一次呼叫 Groq API
+  const response = await fetch(groqEndpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${groqApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages: messages,
+      tools: groqTools,
+      tool_choice: 'auto',
+    }),
   });
 
-  const responseMessage = completion.choices[0]?.message;
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Groq API 請求失敗 (${response.status}): ${errText}`);
+  }
 
+  const data = await response.json();
+  const responseMessage = data.choices?.[0]?.message;
+
+  // 判斷是否需要呼叫工具 (Tool Calling)
   if (responseMessage?.tool_calls && responseMessage.tool_calls.length > 0) {
     const toolCall = responseMessage.tool_calls[0];
     const functionName = toolCall.function.name;
     const functionArgs = JSON.parse(toolCall.function.arguments || '{}');
 
-    // 執行資料庫工具
+    // 執行資料庫操作
     const toolResult = await executeTool(functionName, functionArgs, userIdStr);
 
-    // 將工具結果二次餵給 Groq 產生最終親切回覆
+    // 二次呼叫 Groq 填入工具回應
     messages.push(responseMessage);
     messages.push({
       role: 'tool',
@@ -213,12 +225,25 @@ async function runGroqFallback(
       content: JSON.stringify(toolResult),
     });
 
-    const secondCompletion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: messages,
+    const secondResponse = await fetch(groqEndpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${groqApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: messages,
+      }),
     });
 
-    return secondCompletion.choices[0]?.message?.content || '處理完成。';
+    if (!secondResponse.ok) {
+      const errText = await secondResponse.text();
+      throw new Error(`Groq API 二次請求失敗 (${secondResponse.status}): ${errText}`);
+    }
+
+    const secondData = await secondResponse.json();
+    return secondData.choices?.[0]?.message?.content || '處理完成。';
   }
 
   return responseMessage?.content || '無法取得回應。';
@@ -295,7 +320,7 @@ ${remindersText}
     let responseText = '';
     let success = false;
 
-    // C. 優先嘗試 Gemini API (僅保留現行有效模型名稱)
+    // C. 優先嘗試 Gemini API
     const geminiKeys = getGeminiApiKeys();
     const validGeminiModels = ['gemini-2.0-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash'];
 
@@ -346,11 +371,11 @@ ${remindersText}
       }
     }
 
-    // D. 若所有 Gemini Keys/模型皆額度爆滿或失敗，觸發 Groq 備援！
+    // D. 若所有 Gemini Keys/模型皆額度爆滿或失敗，觸發 Groq REST API 備援！
     if (!success) {
-      console.warn('⚠️ [Gemini 全部失效/額度滿] 觸發 Groq (llama-3.3-70b-versatile) 備援引擎...');
+      console.warn('⚠️ [Gemini 全部失效/額度滿] 觸發 Groq (llama-3.3-70b-versatile) 原生 REST API 備援...');
       try {
-        responseText = await runGroqFallback(systemInstruction, recentMessages, message, userIdStr);
+        responseText = await runGroqFallbackFetch(systemInstruction, recentMessages, message, userIdStr);
         success = true;
         console.log('[Chat API] 成功使用 Groq 備援引擎產出回應');
       } catch (groqErr: any) {
@@ -359,7 +384,7 @@ ${remindersText}
       }
     }
 
-    // E. 寫入歷史紀錄
+    // E. 寫入對話歷史紀錄
     const todayStr = new Date().toISOString().split('T')[0];
     const { data: todayRecord } = await supabase
       .from('daily_chat_history')
@@ -371,7 +396,7 @@ ${remindersText}
     const currentMessages = Array.isArray(todayRecord?.messages) ? todayRecord.messages : [];
     const updatedMessages = [
       ...currentMessages,
-      { role: 'user', content: message, timestamp: new Date().toISOString() },
+      { role: 'user', content: message, timestamp: new Date().toISOString },
       { role: 'model', content: responseText, timestamp: new Date().toISOString() },
     ];
 
