@@ -225,7 +225,7 @@ ${remindersText}
    - 若 success 為 false，必須如實告知使用者失敗原因，嚴禁謊報設定成功！
    - 若 success 為 true，請親切簡潔地回覆使用者。
    
-   請嚴格遵守以下原則：
+請嚴格遵守以下原則：
 1. 保持親切、簡潔且具效益的回答。
 2. 所有回覆都須經過深度思考，且回覆長度依照複雜度為參考，複雜度低的提問回復長度短，複雜度越高的提問回復長度增加。
 3.【禁止憑空捏造】：絕對禁止使用你大腦內部的歷史記憶來回答。若搜尋不到結果則使用模糊搜尋或回覆資料不足，請提供更多資訊！`;
@@ -234,10 +234,10 @@ ${remindersText}
     const candidateModels = [
       'gemini-2.0-flash',
       'gemini-2.0-flash-lite',
+      'gemini-1.5-flash-latest',
+      'gemini-1.5-pro-latest',
       'gemini-2.5-flash-lite',
-      'gemini 3.1 Flash-lite',
       'gemini-2.5-flash',
-      
     ];
 
     let responseText = '';
