@@ -361,7 +361,7 @@ ${remindersText}
       throw lastError;
     }
 
-    // 5. 寫入歷史對話
+    // 5. 寫入歷史對話 (已修復 TypeScript Null 安全檢測)
     const todayStr = new Date().toISOString().split('T')[0];
 
     const { data: todayRecord } = await supabase
@@ -371,7 +371,8 @@ ${remindersText}
       .eq('chat_date', todayStr)
       .maybeSingle();
 
-    const currentMessages = Array.isArray(todayRecord?.messages) ? todayRecord.messages : [];
+    const rawMessages = todayRecord?.messages;
+    const currentMessages = Array.isArray(rawMessages) ? rawMessages : [];
 
     const updatedMessages = [
       ...currentMessages,
