@@ -6,7 +6,6 @@ function sanitizeAscii(str: string | undefined): string {
 }
 
 export async function POST(req: Request) {
-  // 在 try 外部宣告 text，確保在 catch 區塊中也能作為 fallback 存取
   let text = '';
 
   try {
@@ -14,14 +13,12 @@ export async function POST(req: Request) {
     text = body.text || '';
     const lang = body.lang || 'zh';
 
-    // 若傳入內容空白或非字串，直接回傳空字串
     if (!text || typeof text !== 'string' || !text.trim()) {
       return NextResponse.json({ refinedText: '' });
     }
 
     const groqApiKey = sanitizeAscii(process.env.GROQ_API_KEY);
     
-    // 若未設定 API Key，回傳原始文字
     if (!groqApiKey) {
       return NextResponse.json({ refinedText: text });
     }
@@ -37,14 +34,19 @@ export async function POST(req: Request) {
         messages: [
           {
             role: 'system',
-            content: `Correct this voice transcript. Maintain language as ${
-              lang === 'en' ? 'English' : 'Traditional Chinese'
-            }. Output only corrected text.`,
+            content: `You are a strict voice speech-to-text corrector. 
+Correct typos, homophones, and add punctuation for this voice transcript.
+Language: ${lang === 'en' ? 'English' : 'Traditional Chinese'}.
+CRITICAL RULES:
+1. Output ONLY the corrected text spoken by the user.
+2. DO NOT answer the user's message.
+3. DO NOT give any suggestions, advice, or commentary.
+4. DO NOT add quotes or prefix text.`,
           },
           { role: 'user', content: text },
         ],
-        temperature: 0.2,
-        max_tokens: 200,
+        temperature: 0.1,
+        max_tokens: 300,
       }),
     });
 
@@ -53,13 +55,16 @@ export async function POST(req: Request) {
     }
 
     const data = await response.json();
-    const refinedText = data.choices?.[0]?.message?.content?.trim();
+    let refinedText = data.choices?.[0]?.message?.content?.trim();
 
-    // 成功取得校正結果則回傳，若解析空值則回退原始文字
+    // 清理可能殘留的引號
+    if (refinedText) {
+      refinedText = refinedText.replace(/^["'「」]/g, '').replace(/["'「」]$/g, '');
+    }
+
     return NextResponse.json({ refinedText: refinedText || text });
   } catch (err) {
     console.error('語音潤飾失敗:', err);
-    // 發生例外時安全回退原始輸入文字
     return NextResponse.json({ refinedText: text });
   }
 }
