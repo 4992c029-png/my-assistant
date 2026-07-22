@@ -88,7 +88,7 @@ const i18n = {
     fontSmall: '字體：小',
     fontMedium: '字體：中',
     fontLarge: '字體：大',
-    inputPlaceholder: '對助理下達命令吧...',
+    inputPlaceholder: '對助理下達命令吧... (Enter 發送，Shift+Enter 換行)',
     voiceProcessing: '✨ 語音潤飾與校正中...',
     send: '發送',
     sending: '...',
@@ -111,10 +111,10 @@ const i18n = {
     done: '完成',
     alarmTitle: '時間到了！提醒通知',
     stopAlarm: '🔕 關閉鬧鐘 / 停止提醒',
-    imageModalTitle: '🎨 AI 圖片生成',
-    imagePromptPlaceholder: '描述你想生成的圖片內容...',
-    generateImage: '生成圖片',
-    generating: '正在繪製圖片中...',
+    imageModalTitle: '🎨 免費 AI 圖片生成 (Flux.1 引擎)',
+    imagePromptPlaceholder: '描述你想生成的圖片內容 (例如: 一隻穿著太空服的可愛貓咪)...',
+    generateImage: '免費生成圖片',
+    generating: 'Flux.1 繪製中...',
     downloadImage: '📥 下載圖片',
     voiceNotSupported: '您的瀏覽器不支援語音識別功能',
     addReminder: '➕ 新增提醒 / 鬧鐘',
@@ -126,9 +126,9 @@ const i18n = {
     dailyRepeat: '🔄 每天重複',
     weeklyRepeat: '📅 每週重複',
     monthlyRepeat: '📆 每月重複',
-    modeBoth: '🔔 視窗 + 鬧鐘音效',
-    modeAlert: '💬 僅彈出視窗',
-    modeAudio: '🎵 僅播放鬧鐘',
+    modeBoth: '🔔 視窗/推播 + 鬧鐘音效',
+    modeAlert: '💬 僅視窗/推播通知',
+    modeAudio: '🎵 僅播放鬧鐘音效',
     addReminderBtn: '新增提醒事項',
     pendingReminders: '📋 待觸發提醒與鬧鐘',
     noReminders: '目前沒有設定任何待觸發的提醒。',
@@ -149,8 +149,8 @@ const i18n = {
     fontSmall: 'Font: Small',
     fontMedium: 'Font: Medium',
     fontLarge: 'Font: Large',
-    inputPlaceholder: 'Type your message...',
-    voiceProcessing: '✨ Polishing voice text...',
+    inputPlaceholder: 'Type a message... (Enter to send, Shift+Enter for new line)',
+    voiceProcessing: '✨ Polishing spoken text...',
     send: 'Send',
     sending: '...',
     noMessages: 'No message history yet. Start chatting!',
@@ -172,10 +172,10 @@ const i18n = {
     done: 'Done',
     alarmTitle: "Time's up! Reminder",
     stopAlarm: '🔕 Stop Alarm',
-    imageModalTitle: '🎨 AI Image Generator',
-    imagePromptPlaceholder: 'Describe the image you want to generate...',
-    generateImage: 'Generate Image',
-    generating: 'Generating image...',
+    imageModalTitle: '🎨 Free AI Image Generator (Flux.1 Engine)',
+    imagePromptPlaceholder: 'Describe the image... (e.g. A cute cat in astronaut suit)',
+    generateImage: 'Generate Image Free',
+    generating: 'Generating with Flux.1...',
     downloadImage: '📥 Download Image',
     voiceNotSupported: 'Voice recognition is not supported in this browser.',
     addReminder: '➕ Add Reminder / Alarm',
@@ -187,8 +187,8 @@ const i18n = {
     dailyRepeat: '🔄 Daily',
     weeklyRepeat: '📅 Weekly',
     monthlyRepeat: '📆 Monthly',
-    modeBoth: '🔔 Popup + Alarm Sound',
-    modeAlert: '💬 Popup Only',
+    modeBoth: '🔔 Popup/Push + Alarm Sound',
+    modeAlert: '💬 Popup/Push Only',
     modeAudio: '🎵 Alarm Sound Only',
     addReminderBtn: 'Add Reminder',
     pendingReminders: '📋 Active Reminders & Alarms',
@@ -273,7 +273,7 @@ function MessageBubbleItem({
         >
           {msg.imageUrl ? (
             <div className="space-y-2">
-              <p>{msg.content}</p>
+              <p className="whitespace-pre-wrap">{msg.content}</p>
               <img
                 src={msg.imageUrl}
                 alt="Generated AI"
@@ -281,7 +281,7 @@ function MessageBubbleItem({
               />
             </div>
           ) : (
-            msg.content
+            <p className="whitespace-pre-wrap">{msg.content}</p>
           )}
         </div>
 
@@ -363,13 +363,14 @@ export default function Home() {
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const processingIdsRef = useRef<Set<string>>(new Set());
   const audioUnlockedRef = useRef<boolean>(false);
 
   const t = i18n[lang];
 
-  // 🌟 全域動態縮放樣式表 (整體尺寸皆已增大 2px)
+  // 全域動態縮放樣式表
   const sizeStyles = {
     small: {
       headerTitle: 'text-[18px] font-bold',
@@ -418,6 +419,15 @@ export default function Home() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // 🌟 輸入框動態適應高度 (動態長高)
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+      const nextHeight = Math.min(inputRef.current.scrollHeight, 160);
+      inputRef.current.style.height = `${nextHeight}px`;
+    }
+  }, [input]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -488,10 +498,12 @@ export default function Home() {
     }
   };
 
+  // 🌟 提醒觸發邏輯 (判斷: 鬧鐘/推播/兩者)
   const processTriggeredReminder = async (reminder: any) => {
     if (!supabase || !isValidUUID(userId)) return;
 
     const repeatType = reminder.repeat_type || 'none';
+    const reminderType = reminder.reminder_type || 'both';
     let nextRemindAt: string | null = null;
 
     if (repeatType !== 'none') {
@@ -519,28 +531,36 @@ export default function Home() {
     }
 
     fetchReminders(userId);
-    setActiveAlarm(reminder);
 
-    if (reminder.reminder_type === 'audio' || reminder.reminder_type === 'both') {
+    // 1. 若設定需要全螢幕彈窗 / 推播
+    if (reminderType === 'alert' || reminderType === 'both') {
+      setActiveAlarm(reminder);
+
+      if (Notification.permission === 'granted') {
+        if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+          navigator.serviceWorker.ready.then((reg) => {
+            reg.showNotification(`⏰ 提醒：${reminder.title}`, {
+              body: `預定時間：${new Date(reminder.remind_at).toLocaleTimeString()}`,
+              icon: '/icon-192.png',
+              tag: reminder.id,
+            });
+          });
+        } else {
+          new Notification(`⏰ 提醒：${reminder.title}`, {
+            body: `預定時間：${new Date(reminder.remind_at).toLocaleTimeString()}`,
+          });
+        }
+      }
+    }
+
+    // 2. 若設定需要鬧鐘音效
+    if (reminderType === 'audio' || reminderType === 'both') {
       if (audioRef.current) {
         audioRef.current.currentTime = 0;
         audioRef.current.play().catch((err) => console.log('音訊播放受限:', err));
       }
-    }
-
-    if (Notification.permission === 'granted') {
-      if (navigator.serviceWorker && navigator.serviceWorker.ready) {
-        navigator.serviceWorker.ready.then((reg) => {
-          reg.showNotification(`⏰ 提醒：${reminder.title}`, {
-            body: `預定時間：${new Date(reminder.remind_at).toLocaleTimeString()}`,
-            icon: '/icon-192.png',
-            tag: reminder.id,
-          });
-        });
-      } else {
-        new Notification(`⏰ 提醒：${reminder.title}`, {
-          body: `預定時間：${new Date(reminder.remind_at).toLocaleTimeString()}`,
-        });
+      if (reminderType === 'audio' && !activeAlarm) {
+        setActiveAlarm(reminder);
       }
     }
 
@@ -592,7 +612,6 @@ export default function Home() {
     }
   };
 
-  // 🌟 修復 1：載入該使用者的過往歷史對話紀錄
   const fetchHistory = async (uid: string) => {
     if (!uid || !isValidUUID(uid) || !supabase) return;
     try {
@@ -660,6 +679,7 @@ export default function Home() {
       setNewReminderTitle('');
       setNewReminderTime(getLocalDateTimeString());
       setNewReminderRepeat('none');
+      setNewReminderType('both');
       alert('提醒設定成功！⏰');
     } else {
       alert('設定失敗，請確認格式');
@@ -695,7 +715,7 @@ export default function Home() {
           setUserId(session.user.id);
           fetchInstructions(session.user.id);
           fetchReminders(session.user.id);
-          fetchHistory(session.user.id); // 自動同步歷史紀錄
+          fetchHistory(session.user.id);
         }
       } catch (err) {
         console.error('Session 恢復失敗:', err);
@@ -714,7 +734,7 @@ export default function Home() {
         setUserId(currentSession.user.id);
         fetchInstructions(currentSession.user.id);
         fetchReminders(currentSession.user.id);
-        fetchHistory(currentSession.user.id); // 自動同步歷史紀錄
+        fetchHistory(currentSession.user.id);
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setUserId('');
@@ -758,7 +778,7 @@ export default function Home() {
               setUserId(data.user.id);
               fetchInstructions(data.user.id);
               fetchReminders(data.user.id);
-              fetchHistory(data.user.id); // 自動同步歷史紀錄
+              fetchHistory(data.user.id);
             } else if (error) {
               alert(`Google 認證失敗: ${error.message}`);
             }
@@ -850,7 +870,6 @@ export default function Home() {
       if (data.reply) {
         const replyId = `msg_model_${Date.now()}`;
         setMessages((prev) => [...prev, { id: replyId, role: 'model', content: data.reply }]);
-
         fetchReminders(userId);
       }
     } catch (err) {
@@ -860,7 +879,7 @@ export default function Home() {
     }
   };
 
-  // 語音接收 + AI 即時潤飾語義
+  // 🎤 語音接收 + 僅保留使用者純文字內容
   const toggleVoiceInput = () => {
     if (typeof window === 'undefined') return;
 
@@ -896,6 +915,7 @@ export default function Home() {
                 body: JSON.stringify({ text: rawTranscript, lang }),
               });
               const data = await res.json();
+              // 純淨字串填入輸入框
               setInput(data.refinedText || rawTranscript);
             } catch (err) {
               setInput(rawTranscript);
@@ -926,42 +946,44 @@ export default function Home() {
     }
   };
 
-  // AI 圖片生成處理
+  // 🎨 AI 免費圖片生成處理 (Flux.1 高畫質免費模組)
   const handleGenerateImage = async () => {
     if (!imagePrompt.trim() || imageLoading || !isValidUUID(userId)) return;
     setImageLoading(true);
     setGeneratedImageUrl('');
 
     try {
-      const res = await fetch('/api/generate-image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: imagePrompt, userId }),
+      const seed = Math.floor(Math.random() * 1000000);
+      const encodedPrompt = encodeURIComponent(imagePrompt.trim());
+      // 調用 Pollinations.ai 的 Flux 免費圖片生成引擎
+      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&seed=${seed}&nologo=true&model=flux`;
+
+      // 驗證圖片載入
+      const img = new Image();
+      img.src = imageUrl;
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error('圖片讀取失敗'));
       });
-      const data = await res.json();
 
-      if (data.imageUrl) {
-        setGeneratedImageUrl(data.imageUrl);
+      setGeneratedImageUrl(imageUrl);
 
-        const userMsg = {
-          id: `msg_user_${Date.now()}`,
-          role: 'user',
-          content: `🎨 [生成圖片] ${imagePrompt}`,
-        };
-        const modelMsg = {
-          id: `msg_model_${Date.now()}`,
-          role: 'model',
-          content: `已為您生成圖片：「${imagePrompt}」`,
-          imageUrl: data.imageUrl,
-        };
+      const userMsg = {
+        id: `msg_user_${Date.now()}`,
+        role: 'user',
+        content: `🎨 [免費生成圖片] ${imagePrompt}`,
+      };
+      const modelMsg = {
+        id: `msg_model_${Date.now()}`,
+        role: 'model',
+        content: `已為您生成圖片：「${imagePrompt}」`,
+        imageUrl: imageUrl,
+      };
 
-        setMessages((prev) => [...prev, userMsg, modelMsg]);
-      } else {
-        alert(data.error || '圖片生成失敗，請稍後再試');
-      }
+      setMessages((prev) => [...prev, userMsg, modelMsg]);
     } catch (err) {
-      console.error('圖片生成請求錯誤:', err);
-      alert('連線失敗，請檢查網路設定');
+      console.error('圖片生成錯誤:', err);
+      alert('圖片生成失敗，請稍後重試');
     } finally {
       setImageLoading(false);
     }
@@ -1130,7 +1152,7 @@ export default function Home() {
             </div>
 
             <div className="flex items-center gap-2 flex-shrink-0">
-              {/* 🌟 修復 2：字體大小下拉選單 (放置於語言切換旁) */}
+              {/* 字體大小下拉選單 */}
               <select
                 value={fontSize}
                 onChange={(e) => handleFontSizeChange(e.target.value as 'small' | 'medium' | 'large')}
@@ -1151,7 +1173,6 @@ export default function Home() {
                 <option value="en" className="bg-slate-800 text-white">EN</option>
               </select>
 
-              {/* 設定選單按鈕 */}
               <button
                 onClick={() => setShowSettingsModal(true)}
                 className="text-white/80 hover:text-white active:scale-90 transition-all flex items-center justify-center bg-transparent border-0"
@@ -1165,7 +1186,7 @@ export default function Home() {
             </div>
           </header>
 
-          {/* 2. 聊天區 */}
+          {/* 2. 聊天氣泡區 */}
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
             {messages.length === 0 ? (
               <div className={`text-center text-slate-500 py-20 ${currentStyle.modalText}`}>{t.noMessages}</div>
@@ -1185,45 +1206,51 @@ export default function Home() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* 3. 底部輸入欄 */}
-          <div className="flex-shrink-0 w-full px-3 py-2 border-t border-slate-800 bg-slate-900/95 flex items-center gap-2 box-border pb-[calc(env(safe-area-inset-bottom)+12px)]">
+          {/* 3. 底部動態長高輸入欄 */}
+          <div className="flex-shrink-0 w-full px-3 py-2 border-t border-slate-800 bg-slate-900/95 flex items-end gap-2 box-border pb-[calc(env(safe-area-inset-bottom)+12px)]">
             <button
               onClick={() => setShowImageModal(true)}
-              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-xl rounded-full border border-slate-700 active:scale-95 transition-all flex-shrink-0"
+              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-xl rounded-full border border-slate-700 active:scale-95 transition-all flex-shrink-0 mb-0.5"
               title={t.imageModalTitle}
             >
               🎨
             </button>
 
-            {/* 🎤 語音按鈕與潤飾狀態 */}
             <button
               onClick={toggleVoiceInput}
               disabled={isRefiningVoice}
-              className={`p-2.5 text-xl rounded-full border active:scale-95 transition-all flex-shrink-0 ${
+              className={`p-2.5 text-xl rounded-full border active:scale-95 transition-all flex-shrink-0 mb-0.5 ${
                 isListening
                   ? 'bg-rose-600 border-rose-500 text-white animate-pulse'
                   : isRefiningVoice
                   ? 'bg-amber-600 border-amber-500 text-white animate-spin'
                   : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-white'
               }`}
-              title={isListening ? '點擊停止聆聽' : '點擊語音輸入'}
+              title={isListening ? '點擊停止' : '語音輸入'}
             >
               {isListening ? '🎙️' : isRefiningVoice ? '⚙️' : '🎤'}
             </button>
 
-            <input
-              type="text"
+            {/* 🌟 自適應長高 Textarea */}
+            <textarea
+              ref={inputRef}
+              rows={1}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSendMessage();
+                }
+              }}
               placeholder={isRefiningVoice ? t.voiceProcessing : isListening ? '正聆聽您的聲音...' : t.inputPlaceholder}
-              className={`flex-1 w-0 bg-slate-800 text-white rounded-full border border-slate-700 focus:outline-none focus:border-violet-500 transition-all box-border ${currentStyle.input}`}
+              className={`flex-1 w-0 bg-slate-800 text-white rounded-2xl border border-slate-700 focus:outline-none focus:border-violet-500 transition-all box-border resize-none max-h-40 overflow-y-auto leading-relaxed ${currentStyle.input}`}
             />
 
             <button
               onClick={handleSendMessage}
               disabled={loading}
-              className={`flex-shrink-0 bg-violet-600 hover:bg-violet-500 text-white rounded-full font-bold transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center box-border ${currentStyle.sendBtn}`}
+              className={`flex-shrink-0 bg-violet-600 hover:bg-violet-500 text-white rounded-full font-bold transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center box-border mb-0.5 ${currentStyle.sendBtn}`}
             >
               {loading ? t.sending : t.send}
             </button>
@@ -1231,7 +1258,7 @@ export default function Home() {
         </>
       )}
 
-      {/* AI 圖片生成 Modal */}
+      {/* 免費 AI 圖片生成 Modal */}
       {showImageModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-5 w-full max-w-md shadow-2xl space-y-4">
@@ -1276,7 +1303,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* 鬧鐘/提醒觸發 Modal */}
+      {/* 鬧鐘/全螢幕提醒 Modal */}
       {activeAlarm && (
         <div className="fixed inset-0 bg-rose-950/95 backdrop-blur-xl flex flex-col items-center justify-center p-6 z-50 animate-pulse">
           <div className="text-center max-w-md space-y-6">
@@ -1289,7 +1316,7 @@ export default function Home() {
                 {activeAlarm.title}
               </p>
               <p className={`${currentStyle.modalText} text-slate-400 mt-2`}>
-                設定時間：{new Date(activeAlarm.remind_at).toLocaleTimeString()}
+                預定時間：{new Date(activeAlarm.remind_at).toLocaleTimeString()}
               </p>
             </div>
             <button
@@ -1302,7 +1329,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* ⚙️ 主設定 Modal */}
+      {/* ⚙️ 設定 Modal */}
       {showSettingsModal && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 z-40">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
@@ -1314,7 +1341,6 @@ export default function Home() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {/* 使用者資訊 */}
               <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-700/50 flex flex-col gap-3">
                 <div className="flex items-center gap-3">
                   {user?.user_metadata?.avatar_url ? (
@@ -1332,7 +1358,6 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* 提醒中心 */}
               <div>
                 <button
                   onClick={() => { setShowSettingsModal(false); setShowReminderModal(true); }}
@@ -1348,7 +1373,6 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* 記憶大腦 */}
               <div className="space-y-3 pt-2">
                 <h4 className={`${currentStyle.modalText} font-bold text-slate-300`}>{t.brainRules} ({instructions.length})</h4>
                 <div className="space-y-3 max-h-[25vh] overflow-y-auto pr-1">
@@ -1404,7 +1428,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* 獨立提醒 Modal */}
+      {/* ⏰ 提醒模式選擇 Modal */}
       {showReminderModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-40">
           <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
@@ -1433,7 +1457,8 @@ export default function Home() {
                   className={`w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-white focus:outline-none ${currentStyle.modalText}`}
                 />
 
-                <div className="grid grid-cols-2 gap-2">
+                {/* 🌟 提醒模式下拉選單 */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                   <input
                     type="datetime-local"
                     value={newReminderTime}
@@ -1449,6 +1474,15 @@ export default function Home() {
                     <option value="daily">{t.dailyRepeat}</option>
                     <option value="weekly">{t.weeklyRepeat}</option>
                     <option value="monthly">{t.monthlyRepeat}</option>
+                  </select>
+                  <select
+                    value={newReminderType}
+                    onChange={(e) => setNewReminderType(e.target.value as any)}
+                    className={`w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:outline-none ${currentStyle.modalText}`}
+                  >
+                    <option value="both">{t.modeBoth}</option>
+                    <option value="alert">{t.modeAlert}</option>
+                    <option value="audio">{t.modeAudio}</option>
                   </select>
                 </div>
 
@@ -1467,7 +1501,10 @@ export default function Home() {
                       <div key={r.id} className="bg-slate-900/40 border border-slate-700/60 rounded-xl p-3.5 flex justify-between items-center gap-2">
                         <div className="min-w-0">
                           <p className={`${currentStyle.modalText} text-slate-100 font-bold truncate`}>{r.title}</p>
-                          <span className="text-slate-400 text-xs">⏰ {new Date(r.remind_at).toLocaleString()}</span>
+                          <div className="flex gap-2 text-slate-400 text-xs mt-1">
+                            <span>⏰ {new Date(r.remind_at).toLocaleString()}</span>
+                            <span>• {r.reminder_type === 'audio' ? '🎵 鬧鐘' : r.reminder_type === 'alert' ? '💬 推播' : '🔔 雙重'}</span>
+                          </div>
                         </div>
                         <button onClick={() => handleDeleteReminder(r.id)} className="text-rose-400 p-1.5">🗑️</button>
                       </div>
