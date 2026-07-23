@@ -64,4 +64,14 @@ export async function POST(req: Request) {
     console.error('圖片生成錯誤:', error);
     return NextResponse.json({ error: '圖片生成服務異常，請稍後再試' }, { status: 500 });
   }
+
+// ── 在 app/api/generate-image/route.ts 建議用更嚴格的限制 ─────────
+
+   const { data: allowed } = await supabase.rpc('check_rate_limit', {
+     p_user_id: userIdStr,
+     p_endpoint: 'generate-image',
+     p_limit: 5,           // 圖片生成比較耗資源，60 秒內最多 5 次
+     p_window_seconds: 60,
+   });
+//
 }
