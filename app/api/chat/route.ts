@@ -261,6 +261,27 @@ async function runGroqPrimary(
 }
 
 export async function POST(req: Request) {
+//
+   const body = await req.json();
+   const userIdStr = cleanUserId(body.userId);
+
+   const { data: allowed, error: rlError } = await supabase.rpc('check_rate_limit', {
+     p_user_id: userIdStr,
+     p_endpoint: 'chat',
+     p_limit: 20,          // 60 秒內最多 20 次對話
+     p_window_seconds: 60,
+   });
+
+   if (rlError) {
+     console.error('速率限制檢查失敗:', rlError);
+     // 檢查失敗時選擇「放行」而不是整個功能掛掉，屬於保守但不影響體驗的作法
+   } else if (allowed === false) {
+     return NextResponse.json(
+       { reply: '⚠️ 您發送訊息的速度有點快，請稍後幾秒再試一次。' },
+       { status: 429 }
+     );
+   }
+// 
   try {
     const { message, userId } = await req.json();
     const userIdStr = cleanUserId(userId);
