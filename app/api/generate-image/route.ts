@@ -5,15 +5,6 @@ function sanitizeAscii(str: string | undefined): string {
   return str.replace(/[^\x00-\x7F]/g, '').trim();
 }
 
-// ── 在 app/api/generate-image/route.ts 建議用更嚴格的限制 ─────────
-
-   const { data: allowed } = await supabase.rpc('check_rate_limit', {
-     p_user_id: userIdStr,
-     p_endpoint: 'generate-image',
-     p_limit: 5,           // 圖片生成比較耗資源，60 秒內最多 5 次
-     p_window_seconds: 60,
-   });
-//
 
 export async function POST(req: Request) {
   try {
