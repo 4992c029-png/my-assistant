@@ -16,14 +16,6 @@ export async function POST(req: Request) {
     const cleanPrompt = prompt.trim();
     let enhancedPrompt = cleanPrompt;
 
-//
-   const { data: allowed } = await supabase.rpc('check_rate_limit', {
-     p_user_id: userIdStr,
-     p_endpoint: 'generate-image',
-     p_limit: 5,           // 圖片生成比較耗資源，60 秒內最多 5 次
-     p_window_seconds: 60,
-   });
-//
 
     // 利用 Groq 將中文 Prompt 強化擴充為極緻英文圖片 Prompt
     const groqApiKey = sanitizeAscii(process.env.GROQ_API_KEY);
