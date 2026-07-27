@@ -83,16 +83,6 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
-
-//
-   const { data: allowed } = await supabase.rpc('check_rate_limit', {
-     p_user_id: userIdStr,
-     p_endpoint: 'reminders-write',
-     p_limit: 10,
-     p_window_seconds: 60,
-   });
-//
-  
 }
 
 export async function GET(req: Request) {
