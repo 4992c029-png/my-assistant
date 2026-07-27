@@ -32,7 +32,6 @@ function cleanUserId(rawId: any): string {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-
     const userId = cleanUserId(body.userId || body.user_id);
     const title = String(body.title || '').trim();
     const rawRemindAt = body.remindAt || body.remind_at;
@@ -84,6 +83,16 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
+
+//
+   const { data: allowed } = await supabase.rpc('check_rate_limit', {
+     p_user_id: userIdStr,
+     p_endpoint: 'reminders-write',
+     p_limit: 10,
+     p_window_seconds: 60,
+   });
+//
+  
 }
 
 export async function GET(req: Request) {
