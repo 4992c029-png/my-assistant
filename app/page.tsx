@@ -3,6 +3,17 @@
 import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
+declare global {
+  interface Window {
+    google?: any;
+    SpeechRecognition?: any;
+    webkitSpeechRecognition?: any;
+  }
+}
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+
 // =========================================================
 // Phase 2 - Step 3：加入 app/page.tsx
 // 建議放在檔案上方的工具函式區，並在使用者登入成功之後呼叫一次
@@ -58,17 +69,6 @@ async function subscribeToPush(userId: string) {
 //    你原本就有的 requestNotificationPermission() 按鈕（開啟推播權限）
 //    也可以直接改成呼叫 subscribeToPush(userId)，一次完成「要權限」+「訂閱」。
 
-
-declare global {
-  interface Window {
-    google?: any;
-    SpeechRecognition?: any;
-    webkitSpeechRecognition?: any;
-  }
-}
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
 const dualStorage = {
   getItem: (key: string): string | null => {
