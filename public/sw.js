@@ -104,3 +104,44 @@ self.addEventListener('notificationclick', (event) => {
     })
   );
 });
+
+// =========================================================
+// Phase 2 - Step 2：加入 public/sw.js
+// 這段程式碼「加入」到你現有的 public/sw.js 檔案最下方即可，
+// 不需要整個檔案重寫，前面原本的 install/fetch 事件監聽保留不動。
+// =========================================================
+
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (e) {
+    payload = { title: '⏰ 提醒通知', body: event.data ? event.data.text() : '' };
+  }
+
+  const title = payload.title || '⏰ 提醒通知';
+  const options = {
+    body: payload.body || '',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    vibrate: [200, 100, 200],
+    data: payload.data || {},
+    requireInteraction: true, // 通知不會自動消失，使用者要手動點掉
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    clients.matchAll({ type: 'window' }).then((clientList) => {
+      // 如果 APP 分頁已經開著，直接切換過去；否則開新分頁
+      for (const client of clientList) {
+        if ('focus' in client) return client.focus();
+      }
+      return clients.openWindow('/');
+    })
+  );
+});
+
