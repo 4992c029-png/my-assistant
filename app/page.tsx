@@ -207,60 +207,6 @@ const i18n = {
   },
 };
 
-// =========================================================
-// Phase 2 - Step 3：加入 app/page.tsx
-// 建議放在檔案上方的工具函式區，並在使用者登入成功之後呼叫一次
-// =========================================================
-
-function urlBase64ToUint8Array(base64String: string) {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = atob(base64);
-  return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
-}
-
-async function subscribeToPush(userId: string) {
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
-  if (!('Notification' in window)) return;
-
-  try {
-    const reg = await navigator.serviceWorker.ready;
-
-    const existing = await reg.pushManager.getSubscription();
-    if (existing) return; // 已經訂閱過，不用重複訂閱
-
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') return;
-
-    const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-    if (!vapidPublicKey) {
-      console.error('缺少 NEXT_PUBLIC_VAPID_PUBLIC_KEY 環境變數');
-      return;
-    }
-
-    const subscription = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-    });
-
-    await fetch('/api/push/subscribe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, subscription }),
-    });
-  } catch (err) {
-    console.error('推播訂閱失敗:', err);
-  }
-}
-
-// ── 呼叫時機：找到你原本判斷「使用者已登入」的地方（例如 onAuthStateChange
-//    偵測到合法 session，或 requestNotificationPermission 按鈕觸發之後），
-//    加入這一行：
-//
-//    subscribeToPush(userId);
-//
-//    你原本就有的 requestNotificationPermission() 按鈕（開啟推播權限）
-//    也可以直接改成呼叫 subscribeToPush(userId)，一次完成「要權限」+「訂閱」。
 
 // 長按複製氣泡
 function MessageBubbleItem({
