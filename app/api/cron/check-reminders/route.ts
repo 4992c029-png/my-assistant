@@ -39,50 +39,49 @@ export async function GET(req: Request) {
 
   let sentCount = 0;
 
-  for (const reminder of dueReminders || []) {
-    const { data: subs } = await supabase
-      .from('push_subscriptions')
-      .select('*')
-      .eq('user_id', reminder.user_id);
+for (const reminder of dueReminders || []) {
+  const { data: subs } = await supabase
+    .from('push_subscriptions')
+    .select('*')
+    .eq('user_id', reminder.user_id);
 
-    for (const sub of subs || []) {
-      try {
-        await webPush.sendNotification(
-          {
-            endpoint: sub.endpoint,
-            keys: { p256dh: sub.p256dh, auth: sub.auth },
-          },
-          JSON.stringify({
-            title: '⏰ 提醒通知',
-            body: reminder.title,
-            data: { reminderId: reminder.id },
-          })
-        );
-        sentCount++;
-      } catch (pushErr: any) {
-        // 訂閱已失效（使用者清除資料/解除授權），從資料庫移除避免下次繼續嘗試
-        if (pushErr.statusCode === 410 || pushErr.statusCode === 404) {
-          await supabase.from('push_subscriptions').delete().eq('id', sub.id);
-        } else {
-          console.error('推播發送失敗:', pushErr);
-        }
+  let deliveredToAtLeastOne = false;
+
+  for (const sub of subs || []) {
+    try {
+      await webPush.sendNotification(
+        { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+        JSON.stringify({ title: '⏰ 提醒通知', body: reminder.title, data: { reminderId: reminder.id } })
+      );
+      deliveredToAtLeastOne = true;
+      sentCount++;
+    } catch (pushErr: any) {
+      if (pushErr.statusCode === 410 || pushErr.statusCode === 404) {
+        await supabase.from('push_subscriptions').delete().eq('id', sub.id);
+      } else {
+        console.error('推播發送失敗:', pushErr);
       }
     }
-
-    // 一次性提醒標記完成；重複提醒則計算下一次觸發時間
-    if (!reminder.repeat_type || reminder.repeat_type === 'none') {
-      await supabase.from('user_reminders').update({ is_triggered: true }).eq('id', reminder.id);
-    } else {
-      const next = new Date(reminder.remind_at);
-      if (reminder.repeat_type === 'daily') next.setDate(next.getDate() + 1);
-      if (reminder.repeat_type === 'weekly') next.setDate(next.getDate() + 7);
-      if (reminder.repeat_type === 'monthly') next.setMonth(next.getMonth() + 1);
-      await supabase
-        .from('user_reminders')
-        .update({ remind_at: next.toISOString() })
-        .eq('id', reminder.id);
-    }
   }
+
+  // 關鍵修正：完全沒有任何訂閱、或全部發送失敗時，不要標記完成，
+  // 留給前端原本的計時器邏輯處理（APP 重新打開時仍會偵測到並正常顯示/觸發）
+  if (!deliveredToAtLeastOne) {
+    console.log(`提醒 ${reminder.id} 沒有可用的推播訂閱，跳過標記`);
+    continue;
+  }
+
+  if (!reminder.repeat_type || reminder.repeat_type === 'none') {
+    await supabase.from('user_reminders').update({ is_triggered: true }).eq('id', reminder.id);
+  } else {
+    const next = new Date(reminder.remind_at);
+    if (reminder.repeat_type === 'daily') next.setDate(next.getDate() + 1);
+    if (reminder.repeat_type === 'weekly') next.setDate(next.getDate() + 7);
+    if (reminder.repeat_type === 'monthly') next.setMonth(next.getMonth() + 1);
+    await supabase.from('user_reminders').update({ remind_at: next.toISOString() }).eq('id', reminder.id);
+  }
+}
+        
 
   return NextResponse.json({
     success: true,
