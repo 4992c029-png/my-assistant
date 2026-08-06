@@ -580,17 +580,19 @@ export default function Home() {
       nextRemindAt = current.toISOString();
     }
 
-    if (nextRemindAt) {
-      await supabase
-        .from('user_reminders')
-        .update({ remind_at: nextRemindAt, is_triggered: false })
-        .eq('id', reminder.id);
-    } else {
-      await supabase
-        .from('user_reminders')
-        .update({ is_triggered: true })
-        .eq('id', reminder.id);
-    }
+if (nextRemindAt) {
+  // 週期性提醒：保留資料，只更新下一次時間
+  await supabase
+    .from('user_reminders')
+    .update({ remind_at: nextRemindAt, is_triggered: false })
+    .eq('id', reminder.id);
+} else {
+  // 單次提醒：直接刪除，不留在資料庫
+  await supabase
+    .from('user_reminders')
+    .delete()
+    .eq('id', reminder.id);
+}
 
     fetchReminders(userId);
 
