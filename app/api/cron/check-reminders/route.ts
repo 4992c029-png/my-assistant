@@ -66,20 +66,21 @@ for (const reminder of dueReminders || []) {
 
   // 關鍵修正：完全沒有任何訂閱、或全部發送失敗時，不要標記完成，
   // 留給前端原本的計時器邏輯處理（APP 重新打開時仍會偵測到並正常顯示/觸發）
-  if (!deliveredToAtLeastOne) {
-    console.log(`提醒 ${reminder.id} 沒有可用的推播訂閱，跳過標記`);
-    continue;
-  }
+if (!deliveredToAtLeastOne) {
+  continue;
+}
 
-  if (!reminder.repeat_type || reminder.repeat_type === 'none') {
-    await supabase.from('user_reminders').update({ is_triggered: true }).eq('id', reminder.id);
-  } else {
-    const next = new Date(reminder.remind_at);
-    if (reminder.repeat_type === 'daily') next.setDate(next.getDate() + 1);
-    if (reminder.repeat_type === 'weekly') next.setDate(next.getDate() + 7);
-    if (reminder.repeat_type === 'monthly') next.setMonth(next.getMonth() + 1);
-    await supabase.from('user_reminders').update({ remind_at: next.toISOString() }).eq('id', reminder.id);
-  }
+if (!reminder.repeat_type || reminder.repeat_type === 'none') {
+  // 單次提醒：刪除
+  await supabase.from('user_reminders').delete().eq('id', reminder.id);
+} else {
+  // 週期性提醒：更新下一次時間
+  const next = new Date(reminder.remind_at);
+  if (reminder.repeat_type === 'daily') next.setDate(next.getDate() + 1);
+  if (reminder.repeat_type === 'weekly') next.setDate(next.getDate() + 7);
+  if (reminder.repeat_type === 'monthly') next.setMonth(next.getMonth() + 1);
+  await supabase.from('user_reminders').update({ remind_at: next.toISOString() }).eq('id', reminder.id);
+}
 }
         
 
