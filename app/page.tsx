@@ -86,43 +86,52 @@ function urlBase64ToUint8Array(base64String: string) {
   return outputArray;
 }
 
+let pushSubscriptionInProgress = false; // 放在函式外層（模組層級），防止同時重複執行
+
 async function subscribeToPush(userId: string) {
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-    alert('①這個瀏覽器不支援推播');
-    return;
-  }
-
-  const reg = await navigator.serviceWorker.ready;
-  const existing = await reg.pushManager.getSubscription();
-  if (existing) {
-    alert('②偵測到已有本地訂閱，略過重新訂閱（這很可能就是問題所在，需要清除後重試）');
-    return;
-  }
-
-  const permission = await Notification.requestPermission();
-  alert('③通知權限狀態: ' + permission);
-  if (permission !== 'granted') return;
-
-  const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-  alert('④VAPID Key 是否存在: ' + (vapidPublicKey ? '是，長度=' + vapidPublicKey.length : '否，這就是問題'));
-  if (!vapidPublicKey) return;
+  if (pushSubscriptionInProgress) return; // 正在執行中，避免重複觸發
+  pushSubscriptionInProgress = true;
 
   try {
-    const subscription = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-    });
-    alert('⑤瀏覽器訂閱成功，準備存進資料庫');
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (!('Notification' in window)) return;
 
+    const reg = await navigator.serviceWorker.ready;
+    let subscription = await reg.pushManager.getSubscription();
+
+    // 瀏覽器本地還沒有訂閱時，才需要跟使用者要權限、建立新的訂閱
+    if (!subscription) {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') return;
+
+      const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+      if (!vapidPublicKey) {
+        console.error('缺少 NEXT_PUBLIC_VAPID_PUBLIC_KEY 環境變數');
+        return;
+      }
+
+      subscription = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+      });
+    }
+
+    // 🔑 關鍵修正：不管是剛建立的、還是瀏覽器本來就有的訂閱，
+    // 每次都嘗試存一次進資料庫。後端是用 upsert（見 04_api_push_subscribe_route.ts），
+    // 重複呼叫完全安全，這樣就算之前存失敗過，下次登入會自動補救。
     const res = await fetch('/api/push/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, subscription }),
     });
-    const resultText = await res.text();
-    alert('⑥儲存訂閱結果狀態碼: ' + res.status + '\n內容: ' + resultText);
-  } catch (err: any) {
-    alert('❌訂閱失敗於瀏覽器端: ' + err.message);
+
+    if (!res.ok) {
+      console.error('儲存推播訂閱失敗:', await res.text());
+    }
+  } catch (err) {
+    console.error('推播訂閱失敗:', err);
+  } finally {
+    pushSubscriptionInProgress = false;
   }
 }
 
