@@ -94,13 +94,24 @@ self.addEventListener('push', (event) => {
 
 // 點擊通知開啟 App
 self.addEventListener('notificationclick', (event) => {
+  const reminderId = event.notification.data?.reminderId;
   event.notification.close();
+
+  const targetUrl = reminderId ? `/?alarmReminderId=${reminderId}` : '/';
+
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      if (clientList.length > 0) {
-        return clientList[0].focus();
+      for (const client of clientList) {
+        if ('focus' in client) {
+          // APP 已經開著：直接傳訊息叫它顯示全螢幕鬧鐘，不用整個換網址
+          if (reminderId && 'postMessage' in client) {
+            client.postMessage({ type: 'SHOW_ALARM', reminderId });
+          }
+          return client.focus();
+        }
       }
-      return clients.openWindow('/');
+      // APP 完全沒開：開新分頁並帶上 reminderId
+      return clients.openWindow(targetUrl);
     })
   );
 });
@@ -132,16 +143,4 @@ self.addEventListener('push', (event) => {
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  event.waitUntil(
-    clients.matchAll({ type: 'window' }).then((clientList) => {
-      // 如果 APP 分頁已經開著，直接切換過去；否則開新分頁
-      for (const client of clientList) {
-        if ('focus' in client) return client.focus();
-      }
-      return clients.openWindow('/');
-    })
-  );
-});
 
