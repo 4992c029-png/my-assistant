@@ -899,7 +899,45 @@ if (nextRemindAt) {
       };
     }
   }, [user, authLoading]);
+  
+/////
+// ① APP 從關閉狀態被通知點擊打開時，網址會帶 alarmReminderId 參數
+useEffect(() => {
+  const params = new URLSearchParams(window.location.search);
+  const reminderId = params.get('alarmReminderId');
+  if (reminderId && supabase) {
+    supabase
+      .from('user_reminders')
+      .select('*')
+      .eq('id', reminderId)
+      .single()
+      .then(({ data }) => {
+        if (data) setActiveAlarm(data);
+      });
+    window.history.replaceState({}, '', window.location.pathname); // 清掉網址參數
+  }
+}, [supabase]);
 
+// ② APP 本來就開著時，Service Worker 用 postMessage 通知要顯示鬧鐘
+useEffect(() => {
+  if (!('serviceWorker' in navigator)) return;
+  const handler = (event: MessageEvent) => {
+    if (event.data?.type === 'SHOW_ALARM' && event.data.reminderId && supabase) {
+      supabase
+        .from('user_reminders')
+        .select('*')
+        .eq('id', event.data.reminderId)
+        .single()
+        .then(({ data }) => {
+          if (data) setActiveAlarm(data);
+        });
+    }
+  };
+  navigator.serviceWorker.addEventListener('message', handler);
+  return () => navigator.serviceWorker.removeEventListener('message', handler);
+}, [supabase]);
+////  
+  
   const fetchInstructions = async (uid: string) => {
     if (!uid || !isValidUUID(uid) || !supabase) return;
     const { data, error } = await supabase
