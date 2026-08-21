@@ -901,22 +901,23 @@ if (nextRemindAt) {
   }, [user, authLoading]);
   
 /////
-// ① APP 從關閉狀態被通知點擊打開時，網址會帶 alarmReminderId 參數
+// ① 新版：改用後端 API，不受登入還原時間差影響
 useEffect(() => {
   const params = new URLSearchParams(window.location.search);
   const reminderId = params.get('alarmReminderId');
-  if (reminderId && supabase) {
-    supabase
-      .from('user_reminders')
-      .select('*')
-      .eq('id', reminderId)
-      .single()
-      .then(({ data }) => {
-        if (data) setActiveAlarm(data);
-      });
-    window.history.replaceState({}, '', window.location.pathname); // 清掉網址參數
+  if (reminderId) {
+    fetch(`/api/reminders/${reminderId}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.reminder) {
+          setActiveAlarm(data.reminder);
+          setAlarmViewMode('bubble'); // 見下方懸浮框功能
+        }
+      })
+      .catch((err) => console.error('讀取提醒失敗:', err));
+    window.history.replaceState({}, '', window.location.pathname);
   }
-}, [supabase]);
+}, []);
 
 // ② APP 本來就開著時，Service Worker 用 postMessage 通知要顯示鬧鐘
 useEffect(() => {
