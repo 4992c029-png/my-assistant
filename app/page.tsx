@@ -1158,19 +1158,28 @@ useEffect(() => {
     }
   };
 
-  const confirmResetHistory = async () => {
-    if (!isValidUUID(userId)) return;
-    try {
-      await fetch(`/api/history?userId=${userId}`, { method: 'DELETE' });
-      setMessages([]);
-      setFeedbackStatus({});
-      setShowResetModal(false);
-      setShowSettingsModal(false);
-      alert('已清除當前所有對話記憶！🗑️');
-    } catch (err) {
-      console.error(err);
+const confirmResetHistory = async () => {
+  if (!isValidUUID(userId)) return;
+  try {
+    const res = await fetch(`/api/history?userId=${userId}`, { method: 'DELETE' });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error('清除歷史失敗:', errText);
+      alert('❌ 清除失敗，請稍後再試（' + res.status + '）');
+      return; // 後端沒刪成功，畫面不要清空，避免誤導
     }
-  };
+
+    setMessages([]);
+    setFeedbackStatus({});
+    setShowResetModal(false);
+    setShowSettingsModal(false);
+    alert('已清除當前所有對話記憶！🗑️');
+  } catch (err) {
+    console.error(err);
+    alert('❌ 清除失敗，網路或伺服器發生錯誤');
+  }
+};
 
   const handleDeleteInstruction = async (id: string) => {
     if (!supabase) return;
