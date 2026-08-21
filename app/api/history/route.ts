@@ -66,20 +66,22 @@ export async function GET(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-    const userId = searchParams.get('userId');
+  const { searchParams } = new URL(req.url);
+  const userId = searchParams.get('userId');
 
-    if (!userId) {
-      return Response.json({ error: '缺少 userId' }, { status: 400 });
-      return Response.json({ error: '缺少必要參數' }, { status: 400 });
-    }
-
-    const { error } = await supabase
-export async function DELETE(req: Request) {
-
-    if (error) throw error;
-
-    return Response.json({ success: true, message: '歷史歸檔已清空' });
-    return Response.json({ success: true });
-  } catch (error: any) {
-    return Response.json({ error: error.message }, { status: 500 });
+  if (!userId) {
+    return NextResponse.json({ error: '缺少 userId' }, { status: 400 });
   }
+
+  const { error } = await supabase
+    .from('daily_chat_history')
+    .delete()
+    .eq('user_id', userId);
+
+  if (error) {
+    console.error('清除歷史對話失敗:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ success: true });
+}
