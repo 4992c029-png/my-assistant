@@ -70,11 +70,7 @@ const isValidUUID = (id: string) => {
   return uuidRegex.test(id);
 };
 
-// =========================================================
-// Phase 2 - Step 3：加入 app/page.tsx
-// 建議放在檔案上方的工具函式區，並在使用者登入成功之後呼叫一次
-// =========================================================
-
+// Web Push 訂閱用：VAPID public key 轉換工具
 function urlBase64ToUint8Array(base64String: string) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -134,16 +130,6 @@ async function subscribeToPush(userId: string) {
     pushSubscriptionInProgress = false;
   }
 }
-
-// ── 呼叫時機：找到你原本判斷「使用者已登入」的地方（例如 onAuthStateChange
-//    偵測到合法 session，或 requestNotificationPermission 按鈕觸發之後），
-//    加入這一行：
-//
-//    subscribeToPush(userId);
-//
-//    你原本就有的 requestNotificationPermission() 按鈕（開啟推播權限）
-//    也可以直接改成呼叫 subscribeToPush(userId)，一次完成「要權限」+「訂閱」。
-
 
 const getLocalDateTimeString = (d: Date = new Date()) => {
   const year = d.getFullYear();
@@ -392,6 +378,110 @@ function MessageBubbleItem({
   );
 }
 
+// ⏰ 可拖曳的懸浮提醒框：輕點展開全螢幕、長按開啟操作選單
+function ReminderFloatingBubble({
+  reminder,
+  onOpenDetail,
+  onSnooze,
+  onDismiss,
+}: {
+  reminder: any;
+  onOpenDetail: () => void;
+  onSnooze: () => void;
+  onDismiss: () => void;
+}) {
+  const [pos, setPos] = useState({
+    x: typeof window !== 'undefined' ? window.innerWidth - 80 : 300,
+    y: typeof window !== 'undefined' ? window.innerHeight - 220 : 400,
+  });
+  const [showMenu, setShowMenu] = useState(false);
+  const dragRef = useRef({ startX: 0, startY: 0, baseX: 0, baseY: 0, moved: false });
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    dragRef.current = { startX: e.clientX, startY: e.clientY, baseX: pos.x, baseY: pos.y, moved: false };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    longPressTimer.current = setTimeout(() => {
+      if (!dragRef.current.moved) {
+        setShowMenu(true);
+        if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(30);
+      }
+    }, 550);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    const dx = e.clientX - dragRef.current.startX;
+    const dy = e.clientY - dragRef.current.startY;
+    if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
+      dragRef.current.moved = true;
+      if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    }
+    if (dragRef.current.moved) {
+      const newX = Math.min(Math.max(dragRef.current.baseX + dx, 8), window.innerWidth - 72);
+      const newY = Math.min(Math.max(dragRef.current.baseY + dy, 8), window.innerHeight - 72);
+      setPos({ x: newX, y: newY });
+    }
+  };
+
+  const handlePointerUp = () => {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    if (!dragRef.current.moved && !showMenu) {
+      onOpenDetail();
+    }
+  };
+
+  return (
+    <>
+      <div
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: 9999, touchAction: 'none' }}
+        className="w-16 h-16 rounded-full bg-amber-500 shadow-2xl shadow-amber-500/50 flex items-center justify-center animate-bounce cursor-pointer select-none border-2 border-white/40"
+      >
+        <span className="text-2xl">⏰</span>
+      </div>
+
+      {showMenu && (
+        <>
+          <div onClick={() => setShowMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 9998 }} />
+          <div
+            style={{
+              position: 'fixed',
+              left: Math.min(pos.x, (typeof window !== 'undefined' ? window.innerWidth : 400) - 180),
+              top: Math.max(pos.y - 150, 8),
+              zIndex: 10000,
+            }}
+            className="bg-slate-800 border border-slate-600 rounded-xl shadow-2xl overflow-hidden w-44"
+          >
+            <div className="px-3 py-2 text-xs text-slate-400 border-b border-slate-700 truncate">
+              {reminder?.title}
+            </div>
+            <button
+              onClick={() => { setShowMenu(false); onOpenDetail(); }}
+              className="w-full text-left px-3 py-2.5 text-sm text-slate-100 hover:bg-slate-700"
+            >
+              📋 顯示詳情
+            </button>
+            <button
+              onClick={() => { setShowMenu(false); onSnooze(); }}
+              className="w-full text-left px-3 py-2.5 text-sm text-slate-100 hover:bg-slate-700"
+            >
+              😴 稍後提醒（5分鐘）
+            </button>
+            <button
+              onClick={() => { setShowMenu(false); onDismiss(); }}
+              className="w-full text-left px-3 py-2.5 text-sm text-rose-400 hover:bg-slate-700"
+            >
+              ✕ 關閉
+            </button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -437,6 +527,7 @@ export default function Home() {
   const [newReminderRepeat, setNewReminderRepeat] = useState<'none' | 'daily' | 'weekly' | 'monthly'>('none');
   const [newReminderType, setNewReminderType] = useState<'alert' | 'audio' | 'both'>('both');
   const [activeAlarm, setActiveAlarm] = useState<any | null>(null);
+  const [alarmViewMode, setAlarmViewMode] = useState<'bubble' | 'full'>('bubble');
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -614,6 +705,7 @@ if (nextRemindAt) {
     // 1. 若設定需要全螢幕彈窗 / 推播
     if (reminderType === 'alert' || reminderType === 'both') {
       setActiveAlarm(reminder);
+      setAlarmViewMode('bubble');
 
       if (Notification.permission === 'granted') {
         if (navigator.serviceWorker && navigator.serviceWorker.ready) {
@@ -640,6 +732,7 @@ if (nextRemindAt) {
       }
       if (reminderType === 'audio' && !activeAlarm) {
         setActiveAlarm(reminder);
+        setAlarmViewMode('bubble');
       }
     }
 
@@ -670,6 +763,52 @@ if (nextRemindAt) {
   }, [reminders, userId]);
 
   const handleStopAlarm = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+    setActiveAlarm(null);
+    setAlarmViewMode('bubble');
+  };
+
+  // 懸浮框「稍後提醒」：5 分鐘後重新提醒（若原本是單次提醒，資料庫裡的舊資料
+  // 已經在觸發當下被刪除，所以這裡用新增一筆的方式重新建立）
+  const handleSnoozeAlarm = async () => {
+    if (!activeAlarm || !supabase || !isValidUUID(userId)) {
+      setActiveAlarm(null);
+      return;
+    }
+    const newTime = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+    const { data: existing } = await supabase
+      .from('user_reminders')
+      .select('id')
+      .eq('id', activeAlarm.id)
+      .maybeSingle();
+
+    if (existing) {
+      await supabase
+        .from('user_reminders')
+        .update({ remind_at: newTime, is_triggered: false })
+        .eq('id', activeAlarm.id);
+    } else {
+      await supabase.from('user_reminders').insert([
+        {
+          user_id: userId,
+          title: activeAlarm.title,
+          remind_at: newTime,
+          repeat_type: 'none',
+          reminder_type: activeAlarm.reminder_type || 'both',
+          is_triggered: false,
+        },
+      ]);
+    }
+
+    setActiveAlarm(null);
+    fetchReminders(userId);
+  };
+
+  const handleDismissAlarm = () => {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
@@ -795,7 +934,7 @@ if (nextRemindAt) {
           fetchInstructions(session.user.id);
           fetchReminders(session.user.id);
           fetchHistory(session.user.id);
-          subscribeToPush(session.user.id);   // ← 新增這一行
+          subscribeToPush(session.user.id);
         }
       } catch (err) {
         console.error('Session 恢復失敗:', err);
@@ -815,7 +954,7 @@ if (nextRemindAt) {
         fetchInstructions(currentSession.user.id);
         fetchReminders(currentSession.user.id);
         fetchHistory(currentSession.user.id);
-        subscribeToPush(currentSession.user.id);   // ← 新增這一行
+        subscribeToPush(currentSession.user.id);
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setUserId('');
@@ -860,7 +999,7 @@ if (nextRemindAt) {
               fetchInstructions(data.user.id);
               fetchReminders(data.user.id);
               fetchHistory(data.user.id);
-              subscribeToPush(data.user.id);   // ← 新增這一行
+              subscribeToPush(data.user.id);
             } else if (error) {
               alert(`Google 認證失敗: ${error.message}`);
             }
@@ -899,46 +1038,46 @@ if (nextRemindAt) {
       };
     }
   }, [user, authLoading]);
-  
-/////
-// ① 新版：改用後端 API，不受登入還原時間差影響
-useEffect(() => {
-  const params = new URLSearchParams(window.location.search);
-  const reminderId = params.get('alarmReminderId');
-  if (reminderId) {
-    fetch(`/api/reminders/${reminderId}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data?.reminder) {
-          setActiveAlarm(data.reminder);
-          setAlarmViewMode('bubble'); // 見下方懸浮框功能
-        }
-      })
-      .catch((err) => console.error('讀取提醒失敗:', err));
-    window.history.replaceState({}, '', window.location.pathname);
-  }
-}, []);
 
-// ② APP 本來就開著時，Service Worker 用 postMessage 通知要顯示鬧鐘
-useEffect(() => {
-  if (!('serviceWorker' in navigator)) return;
-  const handler = (event: MessageEvent) => {
-    if (event.data?.type === 'SHOW_ALARM' && event.data.reminderId && supabase) {
-      supabase
-        .from('user_reminders')
-        .select('*')
-        .eq('id', event.data.reminderId)
-        .single()
-        .then(({ data }) => {
-          if (data) setActiveAlarm(data);
-        });
+  // 點擊推播通知、APP 從關閉狀態被喚醒時，網址會帶 alarmReminderId 參數，
+  // 改用後端 API（service role，不受 RLS／登入還原時間差影響）讀取該筆提醒
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const reminderId = params.get('alarmReminderId');
+    if (reminderId) {
+      fetch(`/api/reminders/${reminderId}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data?.reminder) {
+            setActiveAlarm(data.reminder);
+            setAlarmViewMode('bubble');
+          }
+        })
+        .catch((err) => console.error('讀取提醒失敗:', err));
+      window.history.replaceState({}, '', window.location.pathname);
     }
-  };
-  navigator.serviceWorker.addEventListener('message', handler);
-  return () => navigator.serviceWorker.removeEventListener('message', handler);
-}, [supabase]);
-////  
-  
+  }, []);
+
+  // APP 本來就開著時，Service Worker 用 postMessage 通知要顯示鬧鐘
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type === 'SHOW_ALARM' && event.data.reminderId) {
+        fetch(`/api/reminders/${event.data.reminderId}`)
+          .then((res) => res.json())
+          .then((data) => {
+            if (data?.reminder) {
+              setActiveAlarm(data.reminder);
+              setAlarmViewMode('bubble');
+            }
+          })
+          .catch((err) => console.error('讀取提醒失敗:', err));
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', handler);
+    return () => navigator.serviceWorker.removeEventListener('message', handler);
+  }, []);
+
   const fetchInstructions = async (uid: string) => {
     if (!uid || !isValidUUID(uid) || !supabase) return;
     const { data, error } = await supabase
@@ -1074,10 +1213,18 @@ useEffect(() => {
     setGeneratedImageUrl('');
 
     try {
-      const seed = Math.floor(Math.random() * 1000000);
-      const encodedPrompt = encodeURIComponent(imagePrompt.trim());
-      // 調用 Pollinations.ai 的 Flux 免費圖片生成引擎
-      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&seed=${seed}&nologo=true&model=flux`;
+      // 改走後端 /api/generate-image，讓 Groq 的中翻英 Prompt 優化實際生效
+      // （原本前端直接組 Pollinations 網址，完全繞過了後端的優化邏輯）
+      const res = await fetch('/api/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: imagePrompt.trim() }),
+      });
+      const resData = await res.json();
+      if (!res.ok || !resData.imageUrl) {
+        throw new Error(resData.error || '圖片生成失敗');
+      }
+      const imageUrl = resData.imageUrl;
 
       // 驗證圖片載入
       const img = new Image();
@@ -1433,8 +1580,18 @@ const confirmResetHistory = async () => {
         </div>
       )}
 
+      {/* ⏰ 提醒觸發：先顯示可拖曳的懸浮框，輕點才展開全螢幕 */}
+      {activeAlarm && alarmViewMode === 'bubble' && (
+        <ReminderFloatingBubble
+          reminder={activeAlarm}
+          onOpenDetail={() => setAlarmViewMode('full')}
+          onSnooze={handleSnoozeAlarm}
+          onDismiss={handleDismissAlarm}
+        />
+      )}
+
       {/* 鬧鐘/全螢幕提醒 Modal */}
-      {activeAlarm && (
+      {activeAlarm && alarmViewMode === 'full' && (
         <div className="fixed inset-0 bg-rose-950/95 backdrop-blur-xl flex flex-col items-center justify-center p-6 z-50 animate-pulse">
           <div className="text-center max-w-md space-y-6">
             <div className="w-24 h-24 rounded-full bg-rose-500/20 border-2 border-rose-400 flex items-center justify-center text-5xl mx-auto animate-bounce">
@@ -1449,12 +1606,20 @@ const confirmResetHistory = async () => {
                 預定時間：{new Date(activeAlarm.remind_at).toLocaleTimeString()}
               </p>
             </div>
-            <button
-              onClick={handleStopAlarm}
-              className={`w-full bg-rose-600 hover:bg-rose-500 text-white font-black rounded-full shadow-lg transition-all active:scale-95 ${currentStyle.modalBtn}`}
-            >
-              {t.stopAlarm}
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setAlarmViewMode('bubble')}
+                className={`flex-1 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded-full shadow-lg transition-all active:scale-95 ${currentStyle.modalBtn}`}
+              >
+                🔽 縮小成懸浮框
+              </button>
+              <button
+                onClick={handleStopAlarm}
+                className={`flex-1 bg-rose-600 hover:bg-rose-500 text-white font-black rounded-full shadow-lg transition-all active:scale-95 ${currentStyle.modalBtn}`}
+              >
+                {t.stopAlarm}
+              </button>
+            </div>
           </div>
         </div>
       )}
