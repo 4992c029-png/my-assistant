@@ -56,43 +56,38 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// 提醒事項
-self.addEventListener('install', (event) => {
-  self.skipWaiting();
-});
-
-self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
-});
-
-// 🌟 強制背景推播接收器 (手機螢幕鎖定/App關閉時也會強制觸發)
+// 🌟 背景推播接收器 (手機螢幕鎖定/App關閉時也會觸發)
+// 注意：這支檔案原本重複註冊了兩次 'push' 監聽器，導致同一則推播會
+// 同時觸發兩個處理常式、可能顯示兩則通知，而且較舊的那個沒有把
+// reminderId 帶進 data，點擊時就無法正確開啟全螢幕鬧鐘畫面。
+// 這裡合併成唯一一個正確版本。
 self.addEventListener('push', (event) => {
-  let data = { title: '⏰ 提醒通知', body: '您的提醒時間到了！' };
-  
+  let payload = { title: '⏰ 提醒通知', body: '您的提醒時間到了！' };
+
   if (event.data) {
     try {
-      data = event.data.json();
+      payload = event.data.json();
     } catch (e) {
-      data.body = event.data.text();
+      payload.body = event.data.text();
     }
   }
 
+  const title = payload.title || '⏰ 提醒通知';
   const options = {
-    body: data.body,
+    body: payload.body || '',
     icon: '/icon-192.png',
     badge: '/icon-192.png',
-    vibrate: [500, 250, 500, 250, 500], // 強制震動節奏
-    tag: data.tag || 'reminder-tag',
+    vibrate: [500, 250, 500, 250, 500],
+    tag: payload.data?.reminderId || 'reminder-tag',
     renotify: true,
-    data: { url: '/' }
+    requireInteraction: true, // 通知不會自動消失，使用者要手動點掉
+    data: payload.data || {}, // 🔑 關鍵：務必把 reminderId 透過 data 帶給點擊事件
   };
 
-  event.waitUntil(
-    self.registration.showNotification(data.title, options)
-  );
+  event.waitUntil(self.registration.showNotification(title, options));
 });
 
-// 點擊通知開啟 App
+// 點擊通知開啟 App，並帶上 reminderId 讓前端顯示對應的鬧鐘懸浮框/全螢幕畫面
 self.addEventListener('notificationclick', (event) => {
   const reminderId = event.notification.data?.reminderId;
   event.notification.close();
@@ -103,7 +98,7 @@ self.addEventListener('notificationclick', (event) => {
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
         if ('focus' in client) {
-          // APP 已經開著：直接傳訊息叫它顯示全螢幕鬧鐘，不用整個換網址
+          // APP 已經開著：直接傳訊息叫它顯示鬧鐘，不用整個換網址
           if (reminderId && 'postMessage' in client) {
             client.postMessage({ type: 'SHOW_ALARM', reminderId });
           }
@@ -115,32 +110,3 @@ self.addEventListener('notificationclick', (event) => {
     })
   );
 });
-
-// =========================================================
-// Phase 2 - Step 2：加入 public/sw.js
-// 這段程式碼「加入」到你現有的 public/sw.js 檔案最下方即可，
-// 不需要整個檔案重寫，前面原本的 install/fetch 事件監聽保留不動。
-// =========================================================
-
-self.addEventListener('push', (event) => {
-  let payload = {};
-  try {
-    payload = event.data ? event.data.json() : {};
-  } catch (e) {
-    payload = { title: '⏰ 提醒通知', body: event.data ? event.data.text() : '' };
-  }
-
-  const title = payload.title || '⏰ 提醒通知';
-  const options = {
-    body: payload.body || '',
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
-    vibrate: [200, 100, 200],
-    data: payload.data || {},
-    requireInteraction: true, // 通知不會自動消失，使用者要手動點掉
-  };
-
-  event.waitUntil(self.registration.showNotification(title, options));
-});
-
-
