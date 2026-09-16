@@ -68,7 +68,7 @@ export async function POST(req: Request) {
 
     const seed = Math.floor(Math.random() * 2147483647);
     const params = new URLSearchParams({
-      model: 'nanobanana',
+      model: 'zimage',
       width: '1024',
       height: '1024',
       seed: String(seed),
