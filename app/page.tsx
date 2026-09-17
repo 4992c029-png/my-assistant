@@ -173,11 +173,16 @@ const i18n = {
     done: '完成',
     alarmTitle: '時間到了！提醒通知',
     stopAlarm: '🔕 關閉鬧鐘 / 停止提醒',
-    imageModalTitle: '🎨 免費 AI 圖片生成 (Flux.1 引擎)',
+    imageModalTitle: '🎨 免費 AI 圖片生成',
     imagePromptPlaceholder: '描述你想生成的圖片內容 (例如: 一隻穿著太空服的可愛貓咪)...',
     generateImage: '免費生成圖片',
-    generating: 'Flux.1 繪製中...',
+    generating: '繪製中...',
     downloadImage: '📥 下載圖片',
+    importImage: '📁 匯入圖片',
+    editImage: '✏️ 修改此圖片',
+    editing: '修改中...',
+    clearImage: '✕ 清除，重新開始',
+    importedImageHint: '已載入圖片，可在上方輸入修改指令後按「修改此圖片」',
     voiceNotSupported: '您的瀏覽器不支援語音識別功能',
     addReminder: '➕ 新增提醒 / 鬧鐘',
     reminderTitlePlaceholder: '例如：下午3點出發去開會',
@@ -234,11 +239,16 @@ const i18n = {
     done: 'Done',
     alarmTitle: "Time's up! Reminder",
     stopAlarm: '🔕 Stop Alarm',
-    imageModalTitle: '🎨 Free AI Image Generator (Flux.1 Engine)',
+    imageModalTitle: '🎨 Free AI Image Generator',
     imagePromptPlaceholder: 'Describe the image... (e.g. A cute cat in astronaut suit)',
     generateImage: 'Generate Image Free',
-    generating: 'Generating with Flux.1...',
+    generating: 'Generating...',
     downloadImage: '📥 Download Image',
+    importImage: '📁 Import Image',
+    editImage: '✏️ Edit This Image',
+    editing: 'Editing...',
+    clearImage: '✕ Clear, start over',
+    importedImageHint: 'Image loaded — enter edit instructions above, then tap "Edit This Image"',
     voiceNotSupported: 'Voice recognition is not supported in this browser.',
     addReminder: '➕ Add Reminder / Alarm',
     reminderTitlePlaceholder: 'e.g. Meeting at 3 PM',
@@ -533,6 +543,7 @@ export default function Home() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const imageFileInputRef = useRef<HTMLInputElement | null>(null);
   const processingIdsRef = useRef<Set<string>>(new Set());
   const audioUnlockedRef = useRef<boolean>(false);
 
@@ -1257,6 +1268,61 @@ if (nextRemindAt) {
     }
   };
 
+  // 匯入本機圖片：讀成 data URI，直接當作目前編輯中的圖片（可以馬上輸入指令修改）
+  const handleImportImage = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert('請選擇圖片檔案');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setGeneratedImageUrl(reader.result as string);
+    };
+    reader.onerror = () => alert('圖片讀取失敗，請重試');
+    reader.readAsDataURL(file);
+    e.target.value = ''; // 允許重複選同一個檔案時仍會觸發 onChange
+  };
+
+  // 修改目前顯示的圖片（不管是剛生成的、還是匯入的），依照輸入框的指令進行編輯
+  const handleEditImage = async () => {
+    if (!imagePrompt.trim() || imageLoading || !generatedImageUrl) return;
+    setImageLoading(true);
+
+    try {
+      const res = await fetch('/api/edit-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageDataUri: generatedImageUrl, prompt: imagePrompt.trim() }),
+      });
+      const resData = await res.json();
+      if (!res.ok || !resData.imageUrl) {
+        throw new Error(resData.error || '圖片修改失敗');
+      }
+
+      setGeneratedImageUrl(resData.imageUrl);
+
+      const userMsg = {
+        id: `msg_user_${Date.now()}`,
+        role: 'user',
+        content: `✏️ [修改圖片] ${imagePrompt}`,
+      };
+      const modelMsg = {
+        id: `msg_model_${Date.now()}`,
+        role: 'model',
+        content: `已依照指令修改圖片：「${imagePrompt}」`,
+        imageUrl: resData.imageUrl,
+      };
+      setMessages((prev) => [...prev, userMsg, modelMsg]);
+    } catch (err: any) {
+      console.error('圖片修改錯誤:', err);
+      alert(err.message || '圖片修改失敗，請稍後重試');
+    } finally {
+      setImageLoading(false);
+    }
+  };
+
   const handleLike = async (msgId: string, content: string) => {
     if (feedbackStatus[msgId] || !isValidUUID(userId)) return;
 
@@ -1554,17 +1620,44 @@ const confirmResetHistory = async () => {
               className={`w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white focus:outline-none focus:border-violet-500 resize-none ${currentStyle.modalText}`}
             />
 
-            <button
-              onClick={handleGenerateImage}
-              disabled={imageLoading || !imagePrompt.trim()}
-              className={`w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl transition-all shadow-lg active:scale-98 ${currentStyle.modalBtn}`}
-            >
-              {imageLoading ? t.generating : t.generateImage}
-            </button>
+            <input
+              type="file"
+              accept="image/*"
+              ref={imageFileInputRef}
+              onChange={handleImportImage}
+              className="hidden"
+            />
+
+            <div className="flex gap-2">
+              <button
+                onClick={handleGenerateImage}
+                disabled={imageLoading || !imagePrompt.trim()}
+                className={`flex-1 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl transition-all shadow-lg active:scale-98 ${currentStyle.modalBtn}`}
+              >
+                {imageLoading ? t.generating : t.generateImage}
+              </button>
+              <button
+                onClick={() => imageFileInputRef.current?.click()}
+                disabled={imageLoading}
+                className={`shrink-0 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white font-bold rounded-xl transition-all active:scale-98 px-3 ${currentStyle.modalBtn}`}
+              >
+                {t.importImage}
+              </button>
+            </div>
 
             {generatedImageUrl && (
               <div className="mt-4 space-y-3">
                 <img src={generatedImageUrl} alt="Generated" className="rounded-xl border border-slate-700 w-full max-h-60 object-cover shadow-lg" />
+                <p className="text-xs text-slate-400 text-center">{t.importedImageHint}</p>
+
+                <button
+                  onClick={handleEditImage}
+                  disabled={imageLoading || !imagePrompt.trim()}
+                  className={`w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold rounded-xl transition-all shadow-lg active:scale-98 ${currentStyle.modalBtn}`}
+                >
+                  {imageLoading ? t.editing : t.editImage}
+                </button>
+
                 <a
                   href={generatedImageUrl}
                   download="ai-generated-image.png"
@@ -1574,6 +1667,14 @@ const confirmResetHistory = async () => {
                 >
                   {t.downloadImage}
                 </a>
+
+                <button
+                  onClick={() => { setGeneratedImageUrl(''); setImagePrompt(''); }}
+                  disabled={imageLoading}
+                  className="w-full text-center text-slate-400 hover:text-white text-sm py-1"
+                >
+                  {t.clearImage}
+                </button>
               </div>
             )}
           </div>
